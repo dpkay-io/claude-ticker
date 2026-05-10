@@ -6,7 +6,7 @@ import type { FieldName, Config } from './fields.js';
 import type { ColorName } from './types.js';
 import { ALL_FIELDS, FIELD_REGISTRY, DEFAULT_CONFIG } from './fields.js';
 import type { TimeFormat } from './types.js';
-import { VALID_COLORS, VALID_DIR_COLORS } from './types.js';
+import { VALID_COLORS, VALID_DIR_COLORS, isValidColor, isValidDirColor } from './types.js';
 
 const DIR_NAME_MIN = 2;
 const DIR_NAME_MAX = 30;
@@ -14,6 +14,10 @@ const DIR_NAME_MAX = 30;
 function die(msg: string): never {
   console.error(`Error: ${msg}`);
   process.exit(1);
+}
+
+function resolvePath(p: string): string {
+  return p === '.' ? process.cwd() : p;
 }
 
 // ── fields ────────────────────────────────────────────────────────────────────
@@ -89,7 +93,7 @@ export function handleColor(args: string[]): void {
           `${f.padEnd(12)}${color.padEnd(12)}${source.padEnd(10)}${notes}`,
         );
       }
-      console.log(`\nValid colors: ${VALID_COLORS.join(', ')}`);
+      console.log(`\nValid colors: ${VALID_COLORS.join(', ')}, any CSS color name (coral, tomato…), or hex (#rgb / #rrggbb)`);
       console.log('Thresholds apply to: ctx, 5h, 7d, effort');
       break;
     }
@@ -97,7 +101,7 @@ export function handleColor(args: string[]): void {
       const field = rest[0] as FieldName;
       const color = rest[1] as ColorName;
       if (!field || !ALL_FIELDS.includes(field))  die(`Unknown field "${field}". Valid: ${ALL_FIELDS.join(', ')}`);
-      if (!color || !VALID_COLORS.includes(color)) die(`Unknown color "${color}". Valid: ${VALID_COLORS.join(', ')}`);
+      if (!color || !isValidColor(color)) die(`Unknown color "${color}". Use a named color (${VALID_COLORS.join(', ')}), a CSS color name, or hex (#rgb / #rrggbb)`);
       const cfg = loadConfig();
       cfg.colors[field] = color;
       saveConfig(cfg);
@@ -145,24 +149,24 @@ export function handleDirColor(args: string[]): void {
           console.log(`${path.padEnd(34)}${color}`);
         }
       }
-      console.log(`\nValid colors: ${VALID_DIR_COLORS.join(', ')}`);
+      console.log(`\nValid colors: ${VALID_DIR_COLORS.join(', ')}, any CSS color name (coral, tomato…), or hex (#rgb / #rrggbb)`);
       break;
     }
     case 'set': {
-      const [path, color] = rest;
-      if (!path || !color) die('Usage: claude-ticker dir-color set <path> <color>');
-      if (!VALID_DIR_COLORS.includes(color as ColorName))
-        die(`Unknown color "${color}". Valid: ${VALID_DIR_COLORS.join(', ')}`);
+      const [rawPath, color] = rest;
+      if (!rawPath || !color) die('Usage: claude-ticker dir-color set <path|.> <color>');
+      if (!isValidDirColor(color))
+        die(`Unknown color "${color}". Use a named color (${VALID_DIR_COLORS.join(', ')}), a CSS color name, or hex (#rgb / #rrggbb)`);
       const cfg = loadConfig();
-      cfg.dirColors[path] = color as ColorName;
+      cfg.dirColors[resolvePath(rawPath)] = color as ColorName;
       saveConfig(cfg);
       break;
     }
     case 'reset': {
-      const [path] = rest;
-      if (!path) die('Usage: claude-ticker dir-color reset <path>');
+      const [rawPath] = rest;
+      if (!rawPath) die('Usage: claude-ticker dir-color reset <path|.>');
       const cfg = loadConfig();
-      delete cfg.dirColors[path];
+      delete cfg.dirColors[resolvePath(rawPath)];
       saveConfig(cfg);
       break;
     }
@@ -199,19 +203,19 @@ export function handleDirName(args: string[]): void {
     }
     case 'set':
     case 'set-long': {
-      const [path, name] = rest;
-      if (!path || !name) die(`Usage: claude-ticker dir-name ${sub} <path> <name>`);
+      const [rawPath, name] = rest;
+      if (!rawPath || !name) die(`Usage: claude-ticker dir-name ${sub} <path|.> <name>`);
       validateDirName(name);
       const cfg = loadConfig();
-      cfg.dirNames[path] = { name, long: sub === 'set-long' };
+      cfg.dirNames[resolvePath(rawPath)] = { name, long: sub === 'set-long' };
       saveConfig(cfg);
       break;
     }
     case 'reset': {
-      const [path] = rest;
-      if (!path) die('Usage: claude-ticker dir-name reset <path>');
+      const [rawPath] = rest;
+      if (!rawPath) die('Usage: claude-ticker dir-name reset <path|.>');
       const cfg = loadConfig();
-      delete cfg.dirNames[path];
+      delete cfg.dirNames[resolvePath(rawPath)];
       saveConfig(cfg);
       break;
     }

@@ -2,11 +2,21 @@
 
 Customizable status bar for [Claude CLI](https://claude.ai/code). Shows your working directory, model, context window usage, rate limits, cost, and more — all in one glanceable line with color coding.
 
-```
-~/ws/my-project  feat/auth  Sonnet 4.6  ctx:12%  5h:8%@14:30  7d:55%@Wed14:30
-```
+![claude-ticker in action](https://raw.githubusercontent.com/dpkay-io/claude-ticker/master/claude-cli.png)
 
 Colors shift green → yellow → red as usage climbs, so you always know at a glance how close you are to a limit.
+
+## Features
+
+- **15 configurable fields** — show exactly what you care about: directory, model, context, rate limits, cost, session time, line counts, vim mode, and more
+- **Dynamic color coding** — context and rate-limit fields shift green → yellow → red as usage climbs; fully customizable per field with named colors, CSS color names, or hex values
+- **Per-directory background colors** — highlight the `dir` field with a different background per project so you always know which repo you're in
+- **Directory aliases** — replace long paths with short names; `set-long` mode appends the sub-path so you never lose your bearings deep in a tree
+- **Flexible ordering and visibility** — reorder fields and toggle any on or off with a single command; changes take effect immediately
+- **Configurable separator** — change the string between fields (default two spaces) to anything you like, e.g. `" | "`
+- **12h/24h clock** — rate-limit reset times shown in whichever format you prefer
+- **Zero runtime dependencies** — lightweight and fast; no extra packages pulled into your environment
+- **Safe init** — `claude-ticker init` backs up your existing `settings.json` before writing anything
 
 ## Prerequisites
 
@@ -22,7 +32,7 @@ npm install -g claude-ticker
 ## Quick start
 
 ```sh
-claude-ticker init    # writes the statusLine entry into ~/.claude/settings.json
+claude-ticker init    # sets claude-ticker as your Claude CLI status bar
 ```
 
 Restart Claude CLI. Your status bar appears immediately.
@@ -37,7 +47,7 @@ claude-ticker preview
 
 ### `claude-ticker init`
 
-Reads `~/.claude/settings.json`, backs it up to `settings.json.bak`, and sets the `statusLine` command to `claude-ticker`. Creates the file if it doesn't exist.
+Configures claude-ticker as the Claude CLI status bar. Your existing settings are backed up to `~/.claude/settings.json.bak` before any changes are made.
 
 ---
 
@@ -94,7 +104,7 @@ claude-ticker color set <field> <color>        # set a field's color
 claude-ticker color thresholds <warn%> <crit%> # set dynamic thresholds
 ```
 
-Available colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white` `dim` `dynamic` `none`
+Available colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white` `dim` `dynamic` `none`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`)
 
 - **`dynamic`** — percentage/level fields only; color shifts green → yellow → red based on thresholds (default for `ctx`, `5h`, `7d`, `effort`)
 - **`none`** — no color applied
@@ -121,6 +131,8 @@ Field color defaults:
 ```sh
 claude-ticker color set dir cyan
 claude-ticker color set ctx green          # always green, ignores thresholds
+claude-ticker color set model coral        # CSS color name
+claude-ticker color set model "#ff7f50"    # hex color
 claude-ticker color thresholds 40 70      # warn earlier
 ```
 
@@ -136,17 +148,20 @@ claude-ticker dir-color set <path> <color>     # assign a background color
 claude-ticker dir-color reset <path>           # remove a mapping
 ```
 
-Valid colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white`
+Valid colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`)
 
-`~` in paths is expanded to your home directory. Matching is case-insensitive on Windows.
+`~` in paths is expanded to your home directory. Use `.` to refer to the current directory. Matching is case-insensitive on Windows.
 
 **Examples:**
 
 ```sh
 claude-ticker dir-color set ~/ws/my-project blue
 claude-ticker dir-color set ~/ws/client-work red
+claude-ticker dir-color set . coral          # current directory, CSS color
+claude-ticker dir-color set . "#4682b4"      # current directory, hex color
 claude-ticker dir-color list
 claude-ticker dir-color reset ~/ws/my-project
+claude-ticker dir-color reset .              # current directory
 ```
 
 ---
@@ -165,7 +180,7 @@ claude-ticker dir-name reset <path>                 # remove an alias
 - **`set`** — always shows just the alias, regardless of how deep in the directory tree you are
 - **`set-long`** — shows the alias plus the subdirectory path relative to the named root (e.g. `my-project/src/components`)
 
-Name constraints: 2–30 characters, no ANSI escape codes. Matching uses the longest-matching path prefix, same as `dir-color`. `~` is expanded to your home directory.
+Name constraints: 2–30 characters, no ANSI escape codes. Matching uses the longest-matching path prefix, same as `dir-color`. `~` is expanded to your home directory. Use `.` to refer to the current directory.
 
 **Examples:**
 
@@ -174,11 +189,15 @@ claude-ticker dir-name set ~/ws/my-project "my-project"
 claude-ticker dir-name set-long ~/ws/client-work "client"
 # → shows "client/src/api" when in ~/ws/client-work/src/api
 
+claude-ticker dir-name set . "cur"           # alias for current directory
+claude-ticker dir-name set-long . "cur"      # long form for current directory
+
 claude-ticker dir-name set ~/ws/my-project "proj" && claude-ticker dir-color set ~/ws/my-project blue
 # → "proj" shown with blue background
 
 claude-ticker dir-name list
 claude-ticker dir-name reset ~/ws/my-project
+claude-ticker dir-name reset .               # current directory
 ```
 
 ---

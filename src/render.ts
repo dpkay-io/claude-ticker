@@ -1,7 +1,7 @@
 import { loadConfig }  from './config.js';
 import type { Config, FieldName, JsonObj } from './fields.js';
 import { FIELD_REGISTRY } from './fields.js';
-import { COLOR_CODES } from './types.js';
+import { COLOR_CODES, colorToFgCode } from './types.js';
 
 function dynamicColor(pct: number, cfg: Config): string {
   if (pct >= cfg.thresholds.critical) return COLOR_CODES.red;
@@ -12,7 +12,7 @@ function dynamicColor(pct: number, cfg: Config): string {
 function resolveColor(field: FieldName, pct: number | null, cfg: Config): string {
   const c = cfg.colors[field] ?? FIELD_REGISTRY[field].defaultColor;
   if (c === 'dynamic' && pct !== null) return dynamicColor(pct, cfg);
-  return COLOR_CODES[c] ?? '';
+  return colorToFgCode(c);
 }
 
 export function renderStatus(data: JsonObj): string {

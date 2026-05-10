@@ -51,7 +51,7 @@ switch (cmd) {
     await render();
     break;
   case 'init':
-    init();
+    await init();
     break;
   case 'preview':
     preview();

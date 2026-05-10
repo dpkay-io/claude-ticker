@@ -16,6 +16,11 @@ vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
 }));
 
+const mockRl = { question: vi.fn(), close: vi.fn() };
+vi.mock('readline/promises', () => ({
+  createInterface: vi.fn(() => mockRl),
+}));
+
 import * as fs from 'fs';
 import { join } from 'path';
 import { init } from '../init.js';
@@ -37,12 +42,14 @@ beforeEach(() => {
   }) as never);
   mockConsoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
   mockConsoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mockRl.question.mockResolvedValue('');
+  mockRl.close.mockReset();
 });
 
 describe('init', () => {
-  test('creates .claude directory', () => {
+  test('creates .claude directory', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    init();
+    await init();
     expect(vi.mocked(fs.mkdirSync)).toHaveBeenCalledWith(CLAUDE_DIR, { recursive: true });
   });
 
@@ -51,8 +58,8 @@ describe('init', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
     });
 
-    test('writes a new settings.json with statusLine command', () => {
-      init();
+    test('writes a new settings.json with statusLine command', async () => {
+      await init();
       expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(
         SETTINGS_PATH,
         JSON.stringify({ statusLine: { type: 'command', command: COMMAND } }, null, 2),
@@ -60,18 +67,18 @@ describe('init', () => {
       );
     });
 
-    test('logs creation message', () => {
-      init();
+    test('logs creation message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining(SETTINGS_PATH));
     });
 
-    test('logs restart message', () => {
-      init();
+    test('logs restart message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Restart'));
     });
 
-    test('does not copy backup', () => {
-      init();
+    test('does not copy backup', async () => {
+      await init();
       expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
     });
   });
@@ -84,13 +91,13 @@ describe('init', () => {
       );
     });
 
-    test('logs already configured message', () => {
-      init();
+    test('logs already configured message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Already configured'));
     });
 
-    test('does not modify files', () => {
-      init();
+    test('does not modify files', async () => {
+      await init();
       expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
       expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
     });
@@ -104,26 +111,31 @@ describe('init', () => {
       );
     });
 
-    test('backs up existing settings', () => {
-      init();
+    test('prompts with existing command name', async () => {
+      await init();
+      expect(mockRl.question).toHaveBeenCalledWith(expect.stringContaining('other-tool'));
+    });
+
+    test('backs up existing settings when user confirms', async () => {
+      await init();
       expect(vi.mocked(fs.copyFileSync)).toHaveBeenCalledWith(SETTINGS_PATH, BACKUP_PATH);
     });
 
-    test('logs backup message', () => {
-      init();
+    test('logs backup message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining(BACKUP_PATH));
     });
 
-    test('writes updated settings preserving other keys', () => {
-      init();
+    test('writes updated settings preserving other keys', async () => {
+      await init();
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
       expect(written.theme).toBe('dark');
       expect(written.statusLine).toEqual({ type: 'command', command: COMMAND });
     });
 
-    test('writes to SETTINGS_PATH', () => {
-      init();
+    test('writes to SETTINGS_PATH', async () => {
+      await init();
       expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(
         SETTINGS_PATH,
         expect.any(String),
@@ -131,14 +143,35 @@ describe('init', () => {
       );
     });
 
-    test('logs update message', () => {
-      init();
+    test('logs update message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining(SETTINGS_PATH));
     });
 
-    test('logs restart message', () => {
-      init();
+    test('logs restart message', async () => {
+      await init();
       expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Restart'));
+    });
+
+    test('aborts without changes when user answers n', async () => {
+      mockRl.question.mockResolvedValue('n');
+      await init();
+      expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
+      expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Aborted'));
+    });
+
+    test('aborts without changes when user answers N', async () => {
+      mockRl.question.mockResolvedValue('N');
+      await init();
+      expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
+      expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
+    });
+
+    test('proceeds when user answers y', async () => {
+      mockRl.question.mockResolvedValue('y');
+      await init();
+      expect(vi.mocked(fs.copyFileSync)).toHaveBeenCalled();
     });
   });
 
@@ -148,8 +181,9 @@ describe('init', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ theme: 'dark' }));
     });
 
-    test('adds statusLine to existing config', () => {
-      init();
+    test('adds statusLine to existing config without prompting', async () => {
+      await init();
+      expect(mockRl.question).not.toHaveBeenCalled();
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
       expect(written.statusLine).toEqual({ type: 'command', command: COMMAND });
@@ -163,8 +197,8 @@ describe('init', () => {
       vi.mocked(fs.readFileSync).mockReturnValue('{ not valid json }');
     });
 
-    test('logs error and exits', () => {
-      expect(() => init()).toThrow('process.exit');
+    test('logs error and exits', async () => {
+      await expect(init()).rejects.toThrow('process.exit');
       expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Cannot parse'));
     });
   });

@@ -1,6 +1,6 @@
 import { homedir } from 'os';
 import type { ColorName, TimeFormat } from './types.js';
-import { RESET, DIM, COLOR_CODES, BG_COLOR_CODES, BG_TEXT_CODES, VALID_DIR_COLORS } from './types.js';
+import { RESET, DIM, colorToFgCode, colorToBgCode } from './types.js';
 
 export type JsonObj = Record<string, unknown>;
 export type DirNameEntry = { name: string; long?: boolean };
@@ -49,10 +49,10 @@ function styled(col: string, text: string): string {
   return col ? col + text + RESET : text;
 }
 
-function styledBg(color: ColorName, text: string): string {
-  const bg = BG_COLOR_CODES[color];
-  const fg = BG_TEXT_CODES[color] ?? '';
-  return bg ? `${bg}${fg}${text}${RESET}` : styled(COLOR_CODES[color], text);
+function styledBg(color: string, text: string): string {
+  const codes = colorToBgCode(color);
+  if (codes) return `${codes.bg}${codes.fg}${text}${RESET}`;
+  return styled(colorToFgCode(color), text);
 }
 
 function normalizePath(p: string, home: string): string {
@@ -61,7 +61,7 @@ function normalizePath(p: string, home: string): string {
   return process.platform === 'win32' ? s.toLowerCase() : s;
 }
 
-function findDirColor(raw: string, dirColors: Record<string, ColorName>): ColorName | null {
+function findDirColor(raw: string, dirColors: Record<string, ColorName>): string | null {
   const home = homedir();
   const cur = normalizePath(raw, home);
   let best: { len: number; color: ColorName } | null = null;

@@ -14,6 +14,7 @@ import {
   handleFields,
   handleColor,
   handleDirColor,
+  handleDirName,
   handleSeparator,
   handleTime,
   handleConfigCmd,
@@ -215,7 +216,7 @@ describe('handleColor', () => {
     });
 
     test('dies on unknown color', () => {
-      expect(() => handleColor(['set', 'model', 'purple'])).toThrow('process.exit');
+      expect(() => handleColor(['set', 'model', 'notacolor'])).toThrow('process.exit');
       expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Unknown color'));
     });
 
@@ -319,7 +320,7 @@ describe('handleDirColor', () => {
     });
 
     test('dies on unknown color', () => {
-      expect(() => handleDirColor(['set', '/some/path', 'purple'])).toThrow('process.exit');
+      expect(() => handleDirColor(['set', '/some/path', 'notacolor'])).toThrow('process.exit');
       expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Unknown color'));
     });
 
@@ -333,6 +334,17 @@ describe('handleDirColor', () => {
       expect(() => handleDirColor(['set', '/path', 'dynamic'])).toThrow('process.exit');
       expect(() => handleDirColor(['set', '/path', 'none'])).toThrow('process.exit');
     });
+
+    test('. expands to cwd', () => {
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/home/testuser/current');
+      handleDirColor(['set', '.', 'blue']);
+      expect(vi.mocked(saveConfig)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dirColors: expect.objectContaining({ '/home/testuser/current': 'blue' }),
+        }),
+      );
+      cwdSpy.mockRestore();
+    });
   });
 
   describe('reset', () => {
@@ -345,6 +357,17 @@ describe('handleDirColor', () => {
       expect(saved.dirColors['/home/testuser/work']).toBeUndefined();
     });
 
+    test('. expands to cwd', () => {
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/home/testuser/current');
+      vi.mocked(loadConfig).mockReturnValue(makeConfig({
+        dirColors: { '/home/testuser/current': 'blue' },
+      }));
+      handleDirColor(['reset', '.']);
+      const saved = vi.mocked(saveConfig).mock.calls[0][0];
+      expect(saved.dirColors['/home/testuser/current']).toBeUndefined();
+      cwdSpy.mockRestore();
+    });
+
     test('dies when path is missing', () => {
       expect(() => handleDirColor(['reset'])).toThrow('process.exit');
       expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Usage'));
@@ -354,6 +377,98 @@ describe('handleDirColor', () => {
   describe('unknown subcommand', () => {
     test('dies with error message', () => {
       expect(() => handleDirColor(['bogus'])).toThrow('process.exit');
+      expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Unknown subcommand'));
+    });
+  });
+});
+
+// ── handleDirName ─────────────────────────────────────────────────────────────
+
+describe('handleDirName', () => {
+  describe('list (default)', () => {
+    test('prints no-entries message when dirNames is empty', () => {
+      vi.mocked(loadConfig).mockReturnValue(makeConfig({ dirNames: {} }));
+      handleDirName([]);
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('No directory names'));
+    });
+
+    test('shows entries when dirNames has items', () => {
+      vi.mocked(loadConfig).mockReturnValue(makeConfig({
+        dirNames: { '/home/testuser/work': { name: 'work', long: false } },
+      }));
+      handleDirName(['list']);
+      const calls: string[] = mockConsoleLog.mock.calls.map((c: any[]) => c[0] as string);
+      expect(calls.some(l => l.includes('/home/testuser/work'))).toBe(true);
+      expect(calls.some(l => l.includes('work'))).toBe(true);
+    });
+  });
+
+  describe('set', () => {
+    test('saves path-name mapping', () => {
+      handleDirName(['set', '/home/testuser/work', 'work']);
+      expect(vi.mocked(saveConfig)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dirNames: expect.objectContaining({ '/home/testuser/work': { name: 'work', long: false } }),
+        }),
+      );
+    });
+
+    test('. expands to cwd', () => {
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/home/testuser/current');
+      handleDirName(['set', '.', 'cur']);
+      expect(vi.mocked(saveConfig)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dirNames: expect.objectContaining({ '/home/testuser/current': { name: 'cur', long: false } }),
+        }),
+      );
+      cwdSpy.mockRestore();
+    });
+
+    test('set-long stores long:true', () => {
+      handleDirName(['set-long', '/home/testuser/work', 'work']);
+      expect(vi.mocked(saveConfig)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dirNames: expect.objectContaining({ '/home/testuser/work': { name: 'work', long: true } }),
+        }),
+      );
+    });
+
+    test('dies when path or name missing', () => {
+      expect(() => handleDirName(['set', '/some/path'])).toThrow('process.exit');
+      expect(() => handleDirName(['set'])).toThrow('process.exit');
+    });
+  });
+
+  describe('reset', () => {
+    test('removes path from dirNames', () => {
+      vi.mocked(loadConfig).mockReturnValue(makeConfig({
+        dirNames: { '/home/testuser/work': { name: 'work' } },
+      }));
+      handleDirName(['reset', '/home/testuser/work']);
+      const saved = vi.mocked(saveConfig).mock.calls[0][0];
+      expect(saved.dirNames['/home/testuser/work']).toBeUndefined();
+    });
+
+    test('. expands to cwd', () => {
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/home/testuser/current');
+      vi.mocked(loadConfig).mockReturnValue(makeConfig({
+        dirNames: { '/home/testuser/current': { name: 'cur' } },
+      }));
+      handleDirName(['reset', '.']);
+      const saved = vi.mocked(saveConfig).mock.calls[0][0];
+      expect(saved.dirNames['/home/testuser/current']).toBeUndefined();
+      cwdSpy.mockRestore();
+    });
+
+    test('dies when path is missing', () => {
+      expect(() => handleDirName(['reset'])).toThrow('process.exit');
+      expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Usage'));
+    });
+  });
+
+  describe('unknown subcommand', () => {
+    test('dies with error message', () => {
+      expect(() => handleDirName(['bogus'])).toThrow('process.exit');
       expect(mockConsoleError).toHaveBeenCalledWith(expect.stringContaining('Unknown subcommand'));
     });
   });
