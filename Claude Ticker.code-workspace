@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "name": "Claude Ticker [master]",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "Claude Ticker ${separator} ${activeRepositoryBranchName} ${separator} ${activeEditorShort}",
+    "workbench.colorCustomizations": {
+      "titleBar.activeBackground": "#db2777",
+      "titleBar.inactiveBackground": "#db2777",
+      "titleBar.activeForeground": "#ffffff",
+      "titleBar.inactiveForeground": "#ffffff",
+      "statusBar.background": "#db2777",
+      "statusBar.foreground": "#ffffff"
+    }
+  }
+}

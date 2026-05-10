@@ -1,0 +1,55 @@
+{
+  "name": "claude-ticker",
+  "version": "0.1.0",
+  "description": "Customizable status bar for Claude CLI. Shows your working directory, model, context window usage, rate limits, cost, and more — all in one glanceable line with color coding.",
+  "type": "module",
+  "bin": {
+    "claude-ticker": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "cli",
+    "status-bar",
+    "statusbar",
+    "terminal",
+    "customizable",
+    "rate-limit",
+    "context-window",
+    "color-coding",
+    "monitoring"
+  ],
+  "author": "Deepak Jha",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dpkay-io/claude-ticker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dpkay-io/claude-ticker/issues"
+  },
+  "homepage": "https://github.com/dpkay-io/claude-ticker#readme",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.1.5",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.5"
+  }
+}
