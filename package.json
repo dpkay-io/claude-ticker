@@ -1,10 +1,10 @@
 {
   "name": "claude-ticker",
-  "version": "0.2.0",
+  "version": "1.0.2",
   "description": "Customizable status bar for Claude CLI. Shows your working directory, model, context window usage, rate limits, cost, and more — all in one glanceable line with color coding.",
   "type": "module",
   "bin": {
-    "claude-ticker": "./dist/index.js"
+    "claude-ticker": "dist/index.js"
   },
   "files": [
     "dist/**/*.js",
@@ -39,11 +39,12 @@
     "color-coding",
     "monitoring"
   ],
+  "preferGlobal": true,
   "author": "Deepak Jha",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dpkay-io/claude-ticker.git"
+    "url": "git+https://github.com/dpkay-io/claude-ticker.git"
   },
   "bugs": {
     "url": "https://github.com/dpkay-io/claude-ticker/issues"
