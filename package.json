@@ -14,6 +14,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "preversion": "npm test",
+    "version": "git add -A",
+    "postversion": "git push && git push --tags && npm publish",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
