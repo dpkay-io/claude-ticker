@@ -1,4 +1,7 @@
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { execSync } from 'child_process';
 import type { ColorName, TimeFormat } from './types.js';
 import { RESET, DIM, colorToFgCode, colorToBgCode } from './types.js';
 
@@ -98,6 +101,22 @@ export interface FieldDef {
   render: (raw: unknown, color: string, opts: RenderOpts) => string | null;
 }
 
+const GIT_BRANCH_TTL_MS = 10_000;
+
+function readGitBranchCache(sessionId: string): { branch: string | undefined } | null {
+  const file = join(tmpdir(), `claude-ticker-git-${sessionId}.json`);
+  try {
+    const { branch, ts } = JSON.parse(readFileSync(file, 'utf8')) as { branch: string | undefined; ts: number };
+    if (Date.now() - ts < GIT_BRANCH_TTL_MS) return { branch };
+  } catch { /* miss */ }
+  return null;
+}
+
+function writeGitBranchCache(sessionId: string, branch: string | undefined): void {
+  const file = join(tmpdir(), `claude-ticker-git-${sessionId}.json`);
+  try { writeFileSync(file, JSON.stringify({ branch, ts: Date.now() }), 'utf8'); } catch { /* ignore */ }
+}
+
 export const FIELD_REGISTRY = {
   dir: {
     label: 'Working directory',
@@ -133,6 +152,18 @@ export const FIELD_REGISTRY = {
       const val = str(raw);
       if (!val) return null;
       return styled(col, val.replace(/^Claude /, ''));
+    },
+  },
+
+  model_id: {
+    label: 'Current model ID',
+    defaultColor: 'none',
+    extract: (data) => str(obj(data.model)?.id),
+    percentValue: null,
+    render: (raw, col) => {
+      const val = str(raw);
+      if (!val) return null;
+      return styled(col, val.replace(/^claude-/, ''));
     },
   },
 
@@ -282,10 +313,37 @@ export const FIELD_REGISTRY = {
     },
   },
 
+  git_branch: {
+    label: 'Git branch (current)',
+    defaultColor: 'cyan',
+    extract: (data) => {
+      const sessionId = str(data.session_id) ?? 'default';
+      const hit = readGitBranchCache(sessionId);
+      if (hit) return hit.branch;
+      let branch: string | undefined;
+      try {
+        branch = execSync('git branch --show-current', {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim() || undefined;
+      } catch {
+        branch = undefined;
+      }
+      writeGitBranchCache(sessionId, branch);
+      return branch;
+    },
+    percentValue: null,
+    render: (raw, col) => {
+      const val = str(raw);
+      if (!val) return null;
+      return styled(col, val);
+    },
+  },
+
   worktree: {
     label: 'Git worktree branch',
     defaultColor: 'cyan',
-    extract: (data) => str(obj(data.worktree)?.branch),
+    extract: (data) => str(obj(data.worktree)?.branch) ?? str(obj(data.workspace)?.git_worktree),
     percentValue: null,
     render: (raw, col) => {
       const val = str(raw);
@@ -321,7 +379,7 @@ export interface Config {
 }
 
 export const DEFAULT_CONFIG: Config = {
-  fields:     ['dir', 'worktree', 'model', 'ctx', '5h', '7d'],
+  fields:     ['dir', 'git_branch', 'model_id', 'ctx', '5h', '7d'],
   colors:     {},
   thresholds: { warning: 50, critical: 75 },
   separator:  '  ',

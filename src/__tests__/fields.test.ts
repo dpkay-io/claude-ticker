@@ -1,9 +1,22 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'os';
+import { execSync } from 'child_process';
+import { existsSync, readFileSync } from 'fs';
 import { RESET, COLOR_CODES, BG_COLOR_CODES, BG_TEXT_CODES } from '../types.js';
 
 vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
+  tmpdir: vi.fn(() => '/tmp'),
+}));
+
+vi.mock('child_process', () => ({
+  execSync: vi.fn(() => ''),
+}));
+
+vi.mock('fs', () => ({
+  existsSync: vi.fn(() => false),
+  readFileSync: vi.fn(() => '{}'),
+  writeFileSync: vi.fn(),
 }));
 
 import { FIELD_REGISTRY, ALL_FIELDS, DEFAULT_CONFIG } from '../fields.js';
@@ -35,8 +48,8 @@ describe('ALL_FIELDS', () => {
 
   test('includes all expected fields', () => {
     const expected = [
-      'dir', 'model', 'ctx', '5h', '7d', 'cost', 'duration',
-      'lines', 'session', 'version', 'effort', 'thinking', 'vim', 'worktree', 'agent',
+      'dir', 'model', 'model_id', 'ctx', '5h', '7d', 'cost', 'duration',
+      'lines', 'session', 'version', 'effort', 'thinking', 'vim', 'git_branch', 'worktree', 'agent',
     ];
     for (const f of expected) {
       expect(ALL_FIELDS).toContain(f);
@@ -46,7 +59,7 @@ describe('ALL_FIELDS', () => {
 
 describe('DEFAULT_CONFIG', () => {
   test('default fields are correct', () => {
-    expect(DEFAULT_CONFIG.fields).toEqual(['dir', 'worktree', 'model', 'ctx', '5h', '7d']);
+    expect(DEFAULT_CONFIG.fields).toEqual(['dir', 'git_branch', 'model_id', 'ctx', '5h', '7d']);
   });
 
   test('default thresholds are 50/75', () => {
@@ -224,6 +237,45 @@ describe('model field', () => {
     const col = COLOR_CODES.cyan;
     const result = f.render('Claude Opus 4.7', col, OPTS);
     expect(result).toBe(col + 'Opus 4.7' + RESET);
+  });
+});
+
+// ── model_id ──────────────────────────────────────────────────────────────────
+
+describe('model_id field', () => {
+  const f: FieldDef = FIELD_REGISTRY.model_id;
+
+  test('extract: reads model.id', () => {
+    expect(f.extract({ model: { id: 'claude-sonnet-4-6' } })).toBe('claude-sonnet-4-6');
+  });
+
+  test('extract: returns undefined when missing', () => {
+    expect(f.extract({})).toBeUndefined();
+    expect(f.extract({ model: {} })).toBeUndefined();
+  });
+
+  test('percentValue is null', () => {
+    expect(f.percentValue).toBeNull();
+  });
+
+  test('render: strips "claude-" prefix', () => {
+    const result = f.render('claude-sonnet-4-6', NO_COLOR, OPTS);
+    expect(stripAnsi(result!)).toBe('sonnet-4-6');
+  });
+
+  test('render: leaves non-claude ID unchanged', () => {
+    const result = f.render('gpt-4', NO_COLOR, OPTS);
+    expect(stripAnsi(result!)).toBe('gpt-4');
+  });
+
+  test('render: returns null when raw is not a string', () => {
+    expect(f.render(undefined, NO_COLOR, OPTS)).toBeNull();
+  });
+
+  test('render: applies color', () => {
+    const col = COLOR_CODES.cyan;
+    const result = f.render('claude-opus-4-7', col, OPTS);
+    expect(result).toBe(col + 'opus-4-7' + RESET);
   });
 });
 
@@ -691,6 +743,90 @@ describe('vim field', () => {
   });
 });
 
+// ── git_branch ────────────────────────────────────────────────────────────────
+
+describe('git_branch field', () => {
+  const f: FieldDef = FIELD_REGISTRY.git_branch;
+
+  beforeEach(() => {
+    vi.mocked(existsSync).mockReturnValue(false); // default: cache miss
+  });
+
+  afterEach(() => {
+    vi.mocked(execSync).mockReset();
+    vi.mocked(existsSync).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  });
+
+  test('extract: returns branch name from git', () => {
+    vi.mocked(execSync).mockReturnValue('main\n');
+    expect(f.extract({})).toBe('main');
+  });
+
+  test('extract: returns undefined when not a git repo', () => {
+    vi.mocked(execSync).mockImplementation(() => { throw new Error('not a git repo'); });
+    expect(f.extract({})).toBeUndefined();
+  });
+
+  test('extract: returns undefined on detached HEAD (empty output)', () => {
+    vi.mocked(execSync).mockReturnValue('');
+    expect(f.extract({})).toBeUndefined();
+  });
+
+  test('extract: trims trailing newline', () => {
+    vi.mocked(execSync).mockReturnValue('feat/my-feature\n');
+    expect(f.extract({})).toBe('feat/my-feature');
+  });
+
+  test('extract: returns cached branch within TTL without calling git', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ branch: 'cached-branch', ts: Date.now() }),
+    );
+    expect(f.extract({ session_id: 'sess1' })).toBe('cached-branch');
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  test('extract: caches undefined (non-repo) within TTL', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ branch: undefined, ts: Date.now() }),
+    );
+    expect(f.extract({ session_id: 'sess2' })).toBeUndefined();
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  test('extract: refreshes after TTL expires', () => {
+    vi.mocked(execSync).mockReturnValue('new-branch\n');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ branch: 'old-branch', ts: Date.now() - 20_000 }),
+    );
+    expect(f.extract({ session_id: 'sess3' })).toBe('new-branch');
+    expect(execSync).toHaveBeenCalled();
+  });
+
+  test('percentValue is null', () => {
+    expect(f.percentValue).toBeNull();
+  });
+
+  test('render: displays branch name directly', () => {
+    const result = f.render('main', NO_COLOR, OPTS);
+    expect(stripAnsi(result!)).toBe('main');
+  });
+
+  test('render: applies color', () => {
+    const col = COLOR_CODES.cyan;
+    const result = f.render('feat/new-ui', col, OPTS);
+    expect(result).toBe(col + 'feat/new-ui' + RESET);
+  });
+
+  test('render: returns null for non-strings', () => {
+    expect(f.render(undefined, NO_COLOR, OPTS)).toBeNull();
+    expect(f.render(null, NO_COLOR, OPTS)).toBeNull();
+  });
+});
+
 // ── worktree ──────────────────────────────────────────────────────────────────
 
 describe('worktree field', () => {
@@ -698,6 +834,14 @@ describe('worktree field', () => {
 
   test('extract: reads worktree.branch', () => {
     expect(f.extract({ worktree: { branch: 'feat/new-ui' } })).toBe('feat/new-ui');
+  });
+
+  test('extract: falls back to workspace.git_worktree', () => {
+    expect(f.extract({ workspace: { git_worktree: 'my-feature' } })).toBe('my-feature');
+  });
+
+  test('extract: worktree.branch takes precedence over workspace.git_worktree', () => {
+    expect(f.extract({ worktree: { branch: 'feature-branch' }, workspace: { git_worktree: 'my-feature' } })).toBe('feature-branch');
   });
 
   test('extract: returns undefined when missing', () => {

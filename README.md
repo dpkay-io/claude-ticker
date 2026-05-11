@@ -6,16 +6,52 @@ Customizable status bar for [Claude CLI](https://claude.ai/code). Shows your wor
 
 Colors shift green → yellow → red as usage climbs, so you always know at a glance how close you are to a limit.
 
+**Zero token cost.** claude-ticker runs entirely on your machine as a status-bar hook — it never touches the Claude API and consumes none of your context or quota.
+
+## Why claude-ticker?
+
+### Never get lost across terminals and Claude sessions
+
+The flagship feature of claude-ticker is **`dir-name` + `dir-color`** working together. Assign each project a short alias and a background color — the status bar instantly tells you which repo you're in, no matter how many terminals or Claude sessions you have open.
+
+```sh
+claude-ticker dir-name set ~/ws/my-app "my-app"
+claude-ticker dir-color set ~/ws/my-app blue
+
+claude-ticker dir-name set ~/ws/client-work "client"
+claude-ticker dir-color set ~/ws/client-work red
+```
+
+Now every terminal and every Claude session shows a color-coded label. Switching between projects means your eyes land on the right context in under a second — no more `pwd`, no more "wait, which session is this?"
+
+### Always see your git branch
+
+The `git_branch` field is on by default. Every status bar render shows the current branch name, so you never accidentally commit to `main` or lose track of a feature branch mid-session.
+
+### One command. Done.
+
+```sh
+claude-ticker init
+```
+
+That's it. No JSON editing, no manual hook wiring, no config file archaeology. Your existing `settings.json` is backed up automatically. Restart Claude CLI and your status bar is live.
+
+### Tiny footprint, instant startup
+
+The package weighs **28.9 kB** on the wire. It has zero runtime dependencies, so there's nothing to pull in, nothing to break, and no perceptible startup overhead.
+
 ## Features
 
-- **15 configurable fields** — show exactly what you care about: directory, model, context, rate limits, cost, session time, line counts, vim mode, and more
+- **dir-name + dir-color** — assign aliases and background colors per project; the status bar always shows where you are, even across multiple terminals and Claude sessions
+- **git branch** — current branch visible at all times; never lose track of your working branch mid-session
+- **17 configurable fields** — show exactly what you care about: directory, git branch, model, context, rate limits, cost, session time, line counts, vim mode, and more
 - **Dynamic color coding** — context and rate-limit fields shift green → yellow → red as usage climbs; fully customizable per field with named colors, CSS color names, or hex values
-- **Per-directory background colors** — highlight the `dir` field with a different background per project so you always know which repo you're in
 - **Directory aliases** — replace long paths with short names; `set-long` mode appends the sub-path so you never lose your bearings deep in a tree
 - **Flexible ordering and visibility** — reorder fields and toggle any on or off with a single command; changes take effect immediately
 - **Configurable separator** — change the string between fields (default two spaces) to anything you like, e.g. `" | "`
 - **12h/24h clock** — rate-limit reset times shown in whichever format you prefer
-- **Zero runtime dependencies** — lightweight and fast; no extra packages pulled into your environment
+- **Zero runtime dependencies** — 28.9 kB package, nothing extra pulled into your environment
+- **Zero token cost** — runs as a local status-bar hook, uses no API tokens and no context window
 - **Safe init** — `claude-ticker init` backs up your existing `settings.json` before writing anything
 
 ## Prerequisites
@@ -64,6 +100,7 @@ claude-ticker fields [list]              # show all fields and visibility
 claude-ticker fields show <field>        # enable a field
 claude-ticker fields hide <field>        # disable a field
 claude-ticker fields order <f1> <f2> …  # set display order
+claude-ticker fields reset               # reset to default fields
 ```
 
 Available fields:
@@ -71,11 +108,13 @@ Available fields:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `dir` | on | Current working directory (home folder shortened to `~`) |
-| `worktree` | on | Git worktree branch, shown as `wt:<branch>` |
-| `model` | on | Active Claude model, "Claude " prefix stripped |
+| `git_branch` | on | Current git branch name |
+| `model_id` | on | Active model ID, `claude-` prefix stripped (e.g. `sonnet-4-6`) |
 | `ctx` | on | Context window fill % — how full this conversation's memory is |
 | `5h` | on | 5-hour usage % with reset time |
 | `7d` | on | 7-day usage % with reset day+time |
+| `model` | off | Active Claude model display name, "Claude " prefix stripped |
+| `worktree` | off | Git worktree branch, shown as `wt:<branch>` |
 | `cost` | off | Session cost in USD, e.g. `$0.042` |
 | `duration` | off | Session wall time, e.g. `4m32s` |
 | `lines` | off | Lines added/removed this session, e.g. `+84 -12` |
@@ -116,6 +155,7 @@ Field color defaults:
 | Field | Default color |
 |-------|---------------|
 | `dir` | yellow |
+| `git_branch` | cyan |
 | `worktree` | cyan |
 | `agent` | magenta |
 | `session` | dim |
@@ -236,11 +276,11 @@ claude-ticker config reset    # reset everything to defaults
 
 ## Configuration file
 
-Settings are stored in `~/.claude/claude-ticker.json`. You can edit it directly or use the commands above.
+Settings are stored in `~/.claude/claude-ticker.json`. You can edit it directly or use the commands above — but you'll rarely need to touch it by hand.
 
 ```json
 {
-  "fields": ["dir", "worktree", "model", "ctx", "5h", "7d"],
+  "fields": ["dir", "git_branch", "model_id", "ctx", "5h", "7d"],
   "colors": {},
   "thresholds": {
     "warning": 50,

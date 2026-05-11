@@ -1,6 +1,6 @@
 {
   "name": "claude-ticker",
-  "version": "1.0.2",
+  "version": "1.1.1",
   "description": "Customizable status bar for Claude CLI. Shows your working directory, model, context window usage, rate limits, cost, and more — all in one glanceable line with color coding.",
   "type": "module",
   "bin": {

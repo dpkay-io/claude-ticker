@@ -66,8 +66,14 @@ export function handleFields(args: string[]): void {
       saveConfig(cfg);
       break;
     }
+    case 'reset': {
+      cfg.fields = [...DEFAULT_CONFIG.fields];
+      saveConfig(cfg);
+      console.log(`Fields reset to default: ${DEFAULT_CONFIG.fields.join(', ')}`);
+      break;
+    }
     default:
-      die(`Unknown subcommand "fields ${sub}". Use: list, show, hide, order`);
+      die(`Unknown subcommand "fields ${sub}". Use: list, show, hide, order, reset`);
   }
 }
 
@@ -269,7 +275,7 @@ export function preview(): void {
   const now  = Math.floor(Date.now() / 1000);
   const sample = {
     workspace:      { current_dir: join(homedir(), 'ws', 'my-project') },
-    model:          { display_name: 'Claude Sonnet 4.6' },
+    model:          { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
     context_window: { used_percentage: 12 },
     cost: {
       total_cost_usd:      0.042,

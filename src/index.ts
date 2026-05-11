@@ -19,6 +19,7 @@ Usage:
   claude-ticker fields show <field>       Enable a field
   claude-ticker fields hide <field>       Disable a field
   claude-ticker fields order <f1> <f2>…  Set display order
+  claude-ticker fields reset              Reset fields to default
 
   claude-ticker color [list]                Show field colors and dynamic thresholds
   claude-ticker color set <field> <color>   Set a field's color
@@ -40,8 +41,8 @@ Usage:
   claude-ticker config [show]             Print full JSON config
   claude-ticker config reset              Reset all settings to defaults
 
-Fields (default on):   dir · model · ctx · 5h · 7d
-Fields (opt-in):       cost · duration · lines · session · version · effort · thinking · vim · worktree · agent
+Fields (default on):   dir · git_branch · model_id · ctx · 5h · 7d
+Fields (opt-in):       cost · duration · lines · session · version · effort · thinking · vim · model · worktree · agent
 Colors:                red · green · yellow · blue · magenta · cyan · white · dim · dynamic · none
 `;
 
