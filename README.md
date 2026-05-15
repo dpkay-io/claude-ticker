@@ -1,18 +1,38 @@
 # claude-ticker
 
-Customizable status bar for [Claude CLI](https://claude.ai/code). Shows your working directory, model, context window usage, rate limits, cost, and more — all in one glanceable line with color coding.
+[![npm version](https://img.shields.io/npm/v/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker)
+[![npm downloads](https://img.shields.io/npm/dm/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker)
+[![license](https://img.shields.io/npm/l/claude-ticker.svg)](https://github.com/dpkay-io/claude-ticker/blob/master/LICENSE)
+[![node](https://img.shields.io/node/v/claude-ticker.svg)](https://nodejs.org)
+
+A customizable status bar for [Claude CLI](https://claude.ai/code) — built so you always know which project, branch, model, and budget you're working with, at a glance.
 
 ![claude-ticker in action](https://raw.githubusercontent.com/dpkay-io/claude-ticker/master/claude-cli.png)
 
-Colors shift green → yellow → red as usage climbs, so you always know at a glance how close you are to a limit.
+**Zero token cost.** claude-ticker runs entirely on your machine as a status-bar hook — it never touches the Claude API and uses none of your context window or quota.
 
-**Zero token cost.** claude-ticker runs entirely on your machine as a status-bar hook — it never touches the Claude API and consumes none of your context or quota.
+## Quick start
+
+```sh
+npm install -g claude-ticker
+claude-ticker init
+```
+
+That's it. `init` wires claude-ticker into Claude CLI's `settings.json` (your existing config is backed up automatically). Restart Claude CLI and the status bar is live.
+
+Want to see it without restarting?
+
+```sh
+claude-ticker preview
+```
 
 ## Why claude-ticker?
 
-### Never get lost across terminals and Claude sessions
+### 1. Never mix up which project you're in — `dir-name` + `dir-color`
 
-The flagship feature of claude-ticker is **`dir-name` + `dir-color`** working together. Assign each project a short alias and a background color — the status bar instantly tells you which repo you're in, no matter how many terminals or Claude sessions you have open.
+The flagship feature, and the one that changes how you work.
+
+Assign every project a short alias and a background color. From that moment on, every Claude session and every terminal shows the same color-coded label for the repo you're in.
 
 ```sh
 claude-ticker dir-name set ~/ws/my-app "my-app"
@@ -22,74 +42,53 @@ claude-ticker dir-name set ~/ws/client-work "client"
 claude-ticker dir-color set ~/ws/client-work red
 ```
 
-Now every terminal and every Claude session shows a color-coded label. Switching between projects means your eyes land on the right context in under a second — no more `pwd`, no more "wait, which session is this?"
+When you tab between five terminals running five Claude sessions, your eyes land on the right one in under a second. No more `pwd`. No more "wait — which repo did I just run that command in?" No more pasting changes into the wrong project.
 
-### Always see your git branch
+### 2. Always know your branch — `git_branch`
 
-The `git_branch` field is on by default. Every status bar render shows the current branch name, so you never accidentally commit to `main` or lose track of a feature branch mid-session.
+`git_branch` is on by default. Every render of the status bar shows the branch you're on, so you don't accidentally commit to `main`, lose track of a feature branch mid-session, or get surprised by a stale checkout after switching worktrees.
 
-### One command. Done.
+> **Tip:** Paired with `dir-name` + `dir-color`, this is the combo that makes claude-ticker indispensable when you're juggling sessions: one Claude on `feature/payments` in the API repo (blue), another on `bugfix/login` in the web repo (red), a third on `main` doing a docs read (green). All instantly readable from the bar — you stop "swapping contexts" in your head because the bar already shows you which context you're in.
 
-```sh
-claude-ticker init
-```
+### 3. Read the bar, not the numbers
 
-That's it. No JSON editing, no manual hook wiring, no config file archaeology. Your existing `settings.json` is backed up automatically. Restart Claude CLI and your status bar is live.
+The fields that matter most when you're deep in a session:
 
-### Tiny footprint, instant startup
+- **`ctx`** — context window fill %. Know when you're approaching a compaction.
+- **`5h`** / **`7d`** — Pro / Max rate-limit usage with reset times.
+- **`cost`** — session spend in USD.
+- **`duration`** — wall-clock time on the current session.
+- **`lines`** — lines added/removed this session.
 
-The package weighs **28.9 kB** on the wire. It has zero runtime dependencies, so there's nothing to pull in, nothing to break, and no perceptible startup overhead.
+Each shifts green → yellow → red as you climb toward a limit, with configurable thresholds (default: warn at 50%, critical at 75%). You don't read the numbers — you read the color.
 
-## Features
+### 4. 17 fields, fully customizable
 
-- **dir-name + dir-color** — assign aliases and background colors per project; the status bar always shows where you are, even across multiple terminals and Claude sessions
-- **git branch** — current branch visible at all times; never lose track of your working branch mid-session
-- **17 configurable fields** — show exactly what you care about: directory, git branch, model, context, rate limits, cost, session time, line counts, vim mode, and more
-- **Dynamic color coding** — context and rate-limit fields shift green → yellow → red as usage climbs; fully customizable per field with named colors, CSS color names, or hex values
-- **Directory aliases** — replace long paths with short names; `set-long` mode appends the sub-path so you never lose your bearings deep in a tree
-- **Flexible ordering and visibility** — reorder fields and toggle any on or off with a single command; changes take effect immediately
-- **Configurable separator** — change the string between fields (default two spaces) to anything you like, e.g. `" | "`
-- **12h/24h clock** — rate-limit reset times shown in whichever format you prefer
-- **Zero runtime dependencies** — 28.9 kB package, nothing extra pulled into your environment
-- **Zero token cost** — runs as a local status-bar hook, uses no API tokens and no context window
-- **Safe init** — `claude-ticker init` backs up your existing `settings.json` before writing anything
+Show, hide, reorder, or recolor any field with a single command. Override colors with named colors, CSS color names (`coral`, `tomato`, …), or hex (`#ff7f50`). Configure the separator, 12h / 24h clock, and your own warning / critical thresholds.
+
+### 5. Zero dependencies, zero token cost, tiny footprint
+
+- **No runtime dependencies.** Nothing extra in your `node_modules`.
+- **~29 kB on the wire.** Installs in a blink, starts in a blink.
+- **No tokens consumed.** Runs as a local status-bar hook, not an API client.
+- **Safe `init`.** Your existing `settings.json` is backed up before any changes.
 
 ## Prerequisites
 
 - [Claude CLI](https://claude.ai/code) installed (`npm install -g @anthropic-ai/claude-code`)
 - Node.js ≥ 18 (already required by Claude CLI)
 
-## Installation
-
-```sh
-npm install -g claude-ticker
-```
-
-## Quick start
-
-```sh
-claude-ticker init    # sets claude-ticker as your Claude CLI status bar
-```
-
-Restart Claude CLI. Your status bar appears immediately.
-
-To see a preview without restarting:
-
-```sh
-claude-ticker preview
-```
-
 ## Commands
 
 ### `claude-ticker init`
 
-Configures claude-ticker as the Claude CLI status bar. Your existing settings are backed up to `~/.claude/settings.json.bak` before any changes are made.
+Wires claude-ticker into Claude CLI as the status bar. Your existing `~/.claude/settings.json` is backed up to `settings.json.bak` before any changes.
 
 ---
 
 ### `claude-ticker preview`
 
-Renders the status bar with sample data so you can see your current configuration without running Claude CLI.
+Renders the status bar with sample data, so you can see your current configuration without restarting Claude CLI.
 
 ---
 
@@ -99,7 +98,7 @@ Renders the status bar with sample data so you can see your current configuratio
 claude-ticker fields [list]              # show all fields and visibility
 claude-ticker fields show <field>        # enable a field
 claude-ticker fields hide <field>        # disable a field
-claude-ticker fields order <f1> <f2> …  # set display order
+claude-ticker fields order <f1> <f2> …   # set display order
 claude-ticker fields reset               # reset to default fields
 ```
 
@@ -138,14 +137,14 @@ claude-ticker fields order ctx 5h 7d dir cost
 ### `claude-ticker color`
 
 ```sh
-claude-ticker color [list]                     # show colors and thresholds
-claude-ticker color set <field> <color>        # set a field's color
-claude-ticker color thresholds <warn%> <crit%> # set dynamic thresholds
+claude-ticker color [list]                      # show colors and thresholds
+claude-ticker color set <field> <color>         # set a field's color
+claude-ticker color thresholds <warn%> <crit%>  # set dynamic thresholds
 ```
 
-Available colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white` `dim` `dynamic` `none`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`)
+Available colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white` `dim` `dynamic` `none`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`).
 
-- **`dynamic`** — percentage/level fields only; color shifts green → yellow → red based on thresholds (default for `ctx`, `5h`, `7d`, `effort`)
+- **`dynamic`** — percentage / level fields only; color shifts green → yellow → red based on thresholds (default for `ctx`, `5h`, `7d`, `effort`)
 - **`none`** — no color applied
 
 Default thresholds: warning at 50%, critical at 75%.
@@ -173,7 +172,7 @@ claude-ticker color set dir cyan
 claude-ticker color set ctx green          # always green, ignores thresholds
 claude-ticker color set model coral        # CSS color name
 claude-ticker color set model "#ff7f50"    # hex color
-claude-ticker color thresholds 40 70      # warn earlier
+claude-ticker color thresholds 40 70       # warn earlier
 ```
 
 ---
@@ -188,7 +187,7 @@ claude-ticker dir-color set <path> <color>     # assign a background color
 claude-ticker dir-color reset <path>           # remove a mapping
 ```
 
-Valid colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`)
+Valid colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`).
 
 `~` in paths is expanded to your home directory. Use `.` to refer to the current directory. Matching is case-insensitive on Windows.
 
@@ -208,7 +207,7 @@ claude-ticker dir-color reset .              # current directory
 
 ### `claude-ticker dir-name`
 
-Assign a human-readable alias to a directory. When your current working directory is at or under a configured path, the alias is shown in the `dir` field instead of the full path. Works with `dir-color` — the alias gets the background color if one is set.
+Assign a human-readable alias to a directory. When your current working directory is at or under a configured path, the alias is shown in the `dir` field instead of the full path. Pairs with `dir-color` — the alias gets the background color if one is set.
 
 ```sh
 claude-ticker dir-name [list]                       # list all aliases
@@ -314,6 +313,10 @@ npm install
 npm run dev    # watch mode
 npm run build  # compile to dist/
 ```
+
+## A note from the author
+
+I built claude-ticker because I was running multiple Claude sessions across repos and constantly losing track of which terminal was where. `pwd`-ing every two minutes broke my flow. The status bar fixes that — and once `dir-color` clicked, I couldn't go back. If it saves you the same friction, that's the whole point.
 
 ## License
 
