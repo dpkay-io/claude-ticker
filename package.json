@@ -1,6 +1,6 @@
 {
   "name": "claude-ticker",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Status bar for Claude CLI — color-coded project labels, git branch, context %, rate limits, and cost in one glanceable line. Zero token cost, zero dependencies.",
   "type": "module",
   "bin": {

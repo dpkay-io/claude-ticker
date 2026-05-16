@@ -66,8 +66,9 @@ Each shifts green → yellow → red as you climb toward a limit, with configura
 
 Show, hide, reorder, or recolor any field with a single command. Override colors with named colors, CSS color names (`coral`, `tomato`, …), or hex (`#ff7f50`). Configure the separator, 12h / 24h clock, and your own warning / critical thresholds.
 
-### 5. Zero dependencies, zero token cost, tiny footprint
+### 5. Blazingly fast, zero dependencies, zero token cost
 
+- **Sub-millisecond rendering.** Directly parses `.git/HEAD` to resolve your branch without spawning costly child processes.
 - **No runtime dependencies.** Nothing extra in your `node_modules`.
 - **~29 kB on the wire.** Installs in a blink, starts in a blink.
 - **No tokens consumed.** Runs as a local status-bar hook, not an API client.

@@ -34,13 +34,22 @@ export function renderStatus(data: JsonObj): string {
 
 export async function render(): Promise<void> {
   if (process.stdin.isTTY) {
-    console.log('claude-ticker: run `claude-ticker --help` for usage.');
+    console.log('claude-ticker is a status bar hook for Claude CLI.\n');
+    console.log('Previewing your current configuration:');
+    const { preview } = await import('./commands.js');
+    preview();
+    console.log('\nRun `claude-ticker --help` for full usage and commands.');
     return;
   }
   let raw = '';
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) raw += chunk as string;
   let data: JsonObj;
-  try { data = JSON.parse(raw) as JsonObj; } catch { process.exit(0); }
+  try { 
+    data = JSON.parse(raw) as JsonObj; 
+  } catch { 
+    process.stdout.write('\x1b[2m\x1b[91m[claude-ticker: parse error]\x1b[0m\n');
+    return; 
+  }
   process.stdout.write(renderStatus(data));
 }

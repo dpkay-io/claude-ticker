@@ -266,8 +266,8 @@ describe('render() stdin entry point', () => {
 
     await render();
 
-    expect(consoleSpy).toHaveBeenCalledWith('claude-ticker: run `claude-ticker --help` for usage.');
-    expect(stdoutSpy).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith('claude-ticker is a status bar hook for Claude CLI.\n');
+    expect(stdoutSpy).toHaveBeenCalled();
   });
 
   test('piped stdin: parses JSON and writes rendered output', async () => {
@@ -280,15 +280,15 @@ describe('render() stdin entry point', () => {
     expect(stripAnsi(stdoutSpy.mock.calls[0][0] as string)).toContain('Sonnet 4.6');
   });
 
-  test('piped stdin: exits 0 on invalid JSON', async () => {
+  test('piped stdin: writes error message on invalid JSON', async () => {
     Object.defineProperty(process, 'stdin', {
       value: makePipedStdin('this is not json'),
       configurable: true,
     });
 
-    await expect(render()).rejects.toThrow('process.exit');
-    expect(exitSpy).toHaveBeenCalledWith(0);
-    expect(stdoutSpy).not.toHaveBeenCalled();
+    await render();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(stdoutSpy).toHaveBeenCalledWith('\x1b[2m\x1b[91m[claude-ticker: parse error]\x1b[0m\n');
   });
 
   test('piped stdin: concatenates multiple chunks', async () => {

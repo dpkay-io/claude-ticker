@@ -131,7 +131,7 @@ function contrastTextAnsi(hex: string): string {
   const [r, g, b] = hexToRgb(hex);
   const toLinear = (c: number) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
   const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-  return L > 0.179 ? '\x1b[30m' : '\x1b[97m';
+  return L > 0.3 ? '\x1b[30m' : '\x1b[97m';
 }
 
 export function colorToFgCode(color: string): string {

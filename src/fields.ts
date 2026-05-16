@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from 'os';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import type { ColorName, TimeFormat } from './types.js';
 import { RESET, DIM, colorToFgCode, colorToBgCode } from './types.js';
@@ -318,6 +318,28 @@ export const FIELD_REGISTRY = {
     defaultColor: 'cyan',
     extract: (data) => {
       const sessionId = str(data.session_id) ?? 'default';
+      const cwd = str(obj(data.workspace)?.current_dir) ?? str(data.cwd);
+      
+      if (cwd) {
+        try {
+          let dir = cwd;
+          let headPath = '';
+          for (let i = 0; i < 10; i++) {
+            const p = join(dir, '.git', 'HEAD');
+            if (existsSync(p)) { headPath = p; break; }
+            const parent = dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+          }
+          if (headPath) {
+            const head = readFileSync(headPath, 'utf8').trim();
+            if (head.startsWith('ref: refs/heads/')) {
+              return head.slice(16);
+            }
+          }
+        } catch { /* ignore and fallback */ }
+      }
+
       const hit = readGitBranchCache(sessionId);
       if (hit) return hit.branch;
       let branch: string | undefined;

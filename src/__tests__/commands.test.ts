@@ -151,6 +151,16 @@ describe('handleFields', () => {
     });
   });
 
+  describe('reset', () => {
+    test('resets fields to default', () => {
+      handleFields(['reset']);
+      expect(vi.mocked(saveConfig)).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: DEFAULT_CONFIG.fields }),
+      );
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Fields reset to default'));
+    });
+  });
+
   describe('unknown subcommand', () => {
     test('dies with error message', () => {
       expect(() => handleFields(['bogus'])).toThrow('process.exit');

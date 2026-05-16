@@ -193,6 +193,31 @@ describe('dir field', () => {
     expect(result).toContain('~/projects');
   });
 
+  test('render: dirName without long', () => {
+    const opts: RenderOpts = { timeFormat: '24h', dirColors: {}, dirNames: { '/home/testuser/projects/myapp': { name: 'app' } } };
+    const result = f.render('/home/testuser/projects/myapp/sub', NO_COLOR, opts);
+    expect(stripAnsi(result!)).toBe('app');
+  });
+
+  test('render: dirName with long', () => {
+    const opts: RenderOpts = { timeFormat: '24h', dirColors: {}, dirNames: { '/home/testuser/projects/myapp': { name: 'app', long: true } } };
+    const result = f.render('/home/testuser/projects/myapp/sub/folder', NO_COLOR, opts);
+    expect(stripAnsi(result!)).toBe('app/sub/folder');
+  });
+
+  test('render: dirName exact match has no remainder', () => {
+    const opts: RenderOpts = { timeFormat: '24h', dirColors: {}, dirNames: { '/home/testuser/projects/myapp': { name: 'app', long: true } } };
+    const result = f.render('/home/testuser/projects/myapp', NO_COLOR, opts);
+    expect(stripAnsi(result!)).toBe('app');
+  });
+
+  test('render: dirName combined with dirColor', () => {
+    const opts: RenderOpts = { timeFormat: '24h', dirColors: { '/home/testuser/projects/myapp': 'blue' }, dirNames: { '/home/testuser/projects/myapp': { name: 'app' } } };
+    const result = f.render('/home/testuser/projects/myapp/sub', NO_COLOR, opts);
+    expect(result).toContain('app');
+    expect(result).toContain(BG_COLOR_CODES.blue!);
+  });
+
   test('render: backslashes converted to slashes', () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     vi.mocked(homedir).mockReturnValue('C:\\Users\\testuser');
@@ -756,6 +781,23 @@ describe('git_branch field', () => {
     vi.mocked(execSync).mockReset();
     vi.mocked(existsSync).mockReset();
     vi.mocked(readFileSync).mockReset();
+  });
+
+  test('extract: zero-spawn fast-path reads .git/HEAD', () => {
+    vi.mocked(existsSync).mockImplementation((p) => String(p).endsWith('HEAD'));
+    vi.mocked(readFileSync).mockReturnValue('ref: refs/heads/fast-branch\n');
+    expect(f.extract({ cwd: '/my/repo' })).toBe('fast-branch');
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  test('extract: zero-spawn fast-path traverses up directories', () => {
+    vi.mocked(existsSync).mockImplementation((p) => {
+      const sp = String(p).replace(/\\/g, '/');
+      return sp === '/my/repo/.git/HEAD';
+    });
+    vi.mocked(readFileSync).mockReturnValue('ref: refs/heads/deep-branch\n');
+    expect(f.extract({ cwd: '/my/repo/src/components' })).toBe('deep-branch');
+    expect(execSync).not.toHaveBeenCalled();
   });
 
   test('extract: returns branch name from git', () => {
