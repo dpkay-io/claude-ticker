@@ -9,9 +9,17 @@ vi.mock('../config.js', () => ({
 
 vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
+  tmpdir: vi.fn(() => '/tmp'),
 }));
 
-import { renderStatus, render } from '../render.js';
+vi.mock('fs', () => ({
+  readFileSync: vi.fn(() => { throw new Error('no file'); }),
+  writeFileSync: vi.fn(),
+  existsSync: vi.fn(() => false),
+}));
+
+import { readFileSync, writeFileSync } from 'fs';
+import { renderStatus, render, deepMerge } from '../render.js';
 import { loadConfig } from '../config.js';
 import { DEFAULT_CONFIG, FIELD_REGISTRY } from '../fields.js';
 import type { Config } from '../fields.js';
@@ -301,5 +309,164 @@ describe('render() stdin entry point', () => {
     await render();
 
     expect(stripAnsi(stdoutSpy.mock.calls[0][0] as string)).toContain('Opus 4.7');
+  });
+});
+
+// ── deepMerge ────────────────────────────────────────────────────────────────
+
+describe('deepMerge', () => {
+  test('current keys overwrite cached keys', () => {
+    const cached = { a: 1, b: 2 };
+    const current = { a: 10, c: 3 };
+    expect(deepMerge(cached, current)).toEqual({ a: 10, b: 2, c: 3 });
+  });
+
+  test('preserves cached keys missing from current', () => {
+    const cached = { context_window: { used_percentage: 42 }, model: { id: 'opus' } };
+    const current = { model: { id: 'sonnet' } };
+    expect(deepMerge(cached, current)).toEqual({
+      context_window: { used_percentage: 42 },
+      model: { id: 'sonnet' },
+    });
+  });
+
+  test('merges nested objects one level deep', () => {
+    const cached = { rate_limits: { five_hour: { pct: 30 }, seven_day: { pct: 55 } } };
+    const current = { rate_limits: { five_hour: { pct: 35 } } };
+    expect(deepMerge(cached, current)).toEqual({
+      rate_limits: { five_hour: { pct: 35 }, seven_day: { pct: 55 } },
+    });
+  });
+
+  test('current scalar replaces cached object', () => {
+    const cached = { x: { nested: true } };
+    const current = { x: 'scalar' };
+    expect(deepMerge(cached, current)).toEqual({ x: 'scalar' });
+  });
+
+  test('current object replaces cached scalar', () => {
+    const cached = { x: 'scalar' };
+    const current = { x: { nested: true } };
+    expect(deepMerge(cached, current)).toEqual({ x: { nested: true } });
+  });
+
+  test('arrays are replaced, not merged', () => {
+    const cached = { tags: ['a', 'b'] };
+    const current = { tags: ['c'] };
+    expect(deepMerge(cached, current)).toEqual({ tags: ['c'] });
+  });
+
+  test('empty current returns cached as-is', () => {
+    const cached = { a: 1, b: { c: 2 } };
+    expect(deepMerge(cached, {})).toEqual({ a: 1, b: { c: 2 } });
+  });
+
+  test('empty cached returns current as-is', () => {
+    const current = { a: 1, b: { c: 2 } };
+    expect(deepMerge({}, current)).toEqual({ a: 1, b: { c: 2 } });
+  });
+});
+
+// ── state caching in render() ────────────────────────────────────────────────
+
+describe('state caching', () => {
+  let originalStdinDescriptor: PropertyDescriptor | undefined;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    originalStdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin');
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('no file'); });
+    vi.mocked(writeFileSync).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (originalStdinDescriptor) {
+      Object.defineProperty(process, 'stdin', originalStdinDescriptor);
+    }
+    stdoutSpy.mockRestore();
+  });
+
+  function pipeData(data: Record<string, unknown>): void {
+    const stream = Readable.from([JSON.stringify(data)]) as unknown as NodeJS.ReadStream;
+    (stream as unknown as Record<string, unknown>).isTTY = false;
+    (stream as unknown as { setEncoding: (enc: string) => void }).setEncoding = () => {};
+    Object.defineProperty(process, 'stdin', { value: stream, configurable: true });
+  }
+
+  test('writes state cache after rendering', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({ fields: ['ctx'], colors: {} }));
+    pipeData({ context_window: { used_percentage: 42 }, session_id: 'test-sess' });
+
+    await render();
+
+    expect(writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('claude-ticker-state-test-sess'),
+      expect.stringContaining('"used_percentage":42'),
+      'utf8',
+    );
+  });
+
+  test('merges cached state into current when cache is fresh', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({
+      fields: ['ctx', '5h'],
+      colors: {},
+      staleTTL: 120,
+    }));
+
+    const cachedData = {
+      context_window: { used_percentage: 40 },
+      rate_limits: { five_hour: { used_percentage: 30, resets_at: 9999999999 } },
+      session_id: 's1',
+    };
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ data: cachedData, ts: Date.now() }),
+    );
+
+    pipeData({ context_window: { used_percentage: 55 }, session_id: 's1' });
+
+    await render();
+
+    const output = stripAnsi(stdoutSpy.mock.calls[0][0] as string);
+    expect(output).toContain('ctx:55%');
+    expect(output).toContain('5h:30%');
+  });
+
+  test('ignores expired cache', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({
+      fields: ['ctx', '5h'],
+      colors: {},
+      staleTTL: 120,
+    }));
+
+    const cachedData = {
+      context_window: { used_percentage: 40 },
+      rate_limits: { five_hour: { used_percentage: 30, resets_at: 9999999999 } },
+    };
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({ data: cachedData, ts: Date.now() - 200_000 }),
+    );
+
+    pipeData({ context_window: { used_percentage: 55 }, session_id: 's2' });
+
+    await render();
+
+    const output = stripAnsi(stdoutSpy.mock.calls[0][0] as string);
+    expect(output).toContain('ctx:55%');
+    expect(output).not.toContain('5h');
+  });
+
+  test('uses "default" session_id when none provided', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({ fields: ['model'], colors: { model: 'none' } }));
+    pipeData({ model: { display_name: 'Claude Opus 4.7' } });
+
+    await render();
+
+    expect(writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('claude-ticker-state-default'),
+      expect.any(String),
+      'utf8',
+    );
   });
 });

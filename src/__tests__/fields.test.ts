@@ -78,6 +78,10 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.colors).toEqual({});
     expect(DEFAULT_CONFIG.dirColors).toEqual({});
   });
+
+  test('default staleTTL is 120 seconds', () => {
+    expect(DEFAULT_CONFIG.staleTTL).toBe(120);
+  });
 });
 
 // ── dir ───────────────────────────────────────────────────────────────────────

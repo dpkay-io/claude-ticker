@@ -398,6 +398,7 @@ export interface Config {
   timeFormat: TimeFormat;
   dirColors: Record<string, ColorName>;
   dirNames: Record<string, DirNameEntry>;
+  staleTTL: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -408,4 +409,5 @@ export const DEFAULT_CONFIG: Config = {
   timeFormat: '24h',
   dirColors:  {},
   dirNames:   {},
+  staleTTL:   120,
 };
