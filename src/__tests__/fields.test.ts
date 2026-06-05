@@ -790,8 +790,8 @@ describe('git_branch field', () => {
   test('extract: zero-spawn fast-path reads .git/HEAD', () => {
     vi.mocked(existsSync).mockImplementation((p) => String(p).endsWith('HEAD'));
     vi.mocked(readFileSync).mockReturnValue('ref: refs/heads/fast-branch\n');
-    expect(f.extract({ cwd: '/my/repo' })).toBe('fast-branch');
-    expect(execSync).not.toHaveBeenCalled();
+    expect(f.extract({ cwd: '/my/repo' })).toMatchObject({ branch: 'fast-branch' });
+    expect(execSync).not.toHaveBeenCalledWith('git branch --show-current', expect.anything());
   });
 
   test('extract: zero-spawn fast-path traverses up directories', () => {
@@ -800,37 +800,37 @@ describe('git_branch field', () => {
       return sp === '/my/repo/.git/HEAD';
     });
     vi.mocked(readFileSync).mockReturnValue('ref: refs/heads/deep-branch\n');
-    expect(f.extract({ cwd: '/my/repo/src/components' })).toBe('deep-branch');
-    expect(execSync).not.toHaveBeenCalled();
+    expect(f.extract({ cwd: '/my/repo/src/components' })).toMatchObject({ branch: 'deep-branch' });
+    expect(execSync).not.toHaveBeenCalledWith('git branch --show-current', expect.anything());
   });
 
   test('extract: returns branch name from git', () => {
     vi.mocked(execSync).mockReturnValue('main\n');
-    expect(f.extract({})).toBe('main');
+    expect(f.extract({})).toMatchObject({ branch: 'main' });
   });
 
-  test('extract: returns undefined when not a git repo', () => {
+  test('extract: returns undefined branch when not a git repo', () => {
     vi.mocked(execSync).mockImplementation(() => { throw new Error('not a git repo'); });
-    expect(f.extract({})).toBeUndefined();
+    expect(f.extract({})).toMatchObject({ branch: undefined });
   });
 
-  test('extract: returns undefined on detached HEAD (empty output)', () => {
+  test('extract: returns undefined branch on detached HEAD (empty output)', () => {
     vi.mocked(execSync).mockReturnValue('');
-    expect(f.extract({})).toBeUndefined();
+    expect(f.extract({})).toMatchObject({ branch: undefined });
   });
 
   test('extract: trims trailing newline', () => {
     vi.mocked(execSync).mockReturnValue('feat/my-feature\n');
-    expect(f.extract({})).toBe('feat/my-feature');
+    expect(f.extract({})).toMatchObject({ branch: 'feat/my-feature' });
   });
 
-  test('extract: returns cached branch within TTL without calling git', () => {
+  test('extract: returns cached branch within TTL without calling git branch', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(readFileSync).mockReturnValue(
       JSON.stringify({ branch: 'cached-branch', ts: Date.now() }),
     );
-    expect(f.extract({ session_id: 'sess1' })).toBe('cached-branch');
-    expect(execSync).not.toHaveBeenCalled();
+    expect(f.extract({ session_id: 'sess1' })).toMatchObject({ branch: 'cached-branch' });
+    expect(execSync).not.toHaveBeenCalledWith('git branch --show-current', expect.anything());
   });
 
   test('extract: caches undefined (non-repo) within TTL', () => {
@@ -838,8 +838,8 @@ describe('git_branch field', () => {
     vi.mocked(readFileSync).mockReturnValue(
       JSON.stringify({ branch: undefined, ts: Date.now() }),
     );
-    expect(f.extract({ session_id: 'sess2' })).toBeUndefined();
-    expect(execSync).not.toHaveBeenCalled();
+    expect(f.extract({ session_id: 'sess2' })).toMatchObject({ branch: undefined });
+    expect(execSync).not.toHaveBeenCalledWith('git branch --show-current', expect.anything());
   });
 
   test('extract: refreshes after TTL expires', () => {
@@ -848,7 +848,7 @@ describe('git_branch field', () => {
     vi.mocked(readFileSync).mockReturnValue(
       JSON.stringify({ branch: 'old-branch', ts: Date.now() - 20_000 }),
     );
-    expect(f.extract({ session_id: 'sess3' })).toBe('new-branch');
+    expect(f.extract({ session_id: 'sess3' })).toMatchObject({ branch: 'new-branch' });
     expect(execSync).toHaveBeenCalled();
   });
 
@@ -857,17 +857,40 @@ describe('git_branch field', () => {
   });
 
   test('render: displays branch name directly', () => {
-    const result = f.render('main', NO_COLOR, OPTS);
+    const result = f.render({ branch: 'main', ins: 0, del: 0 }, NO_COLOR, OPTS);
     expect(stripAnsi(result!)).toBe('main');
   });
 
   test('render: applies color', () => {
     const col = COLOR_CODES.cyan;
-    const result = f.render('feat/new-ui', col, OPTS);
+    const result = f.render({ branch: 'feat/new-ui', ins: 0, del: 0 }, col, OPTS);
     expect(result).toBe(col + 'feat/new-ui' + RESET);
   });
 
-  test('render: returns null for non-strings', () => {
+  test('render: shows green +N for insertions', () => {
+    const col = COLOR_CODES.cyan;
+    const result = f.render({ branch: 'main', ins: 5, del: 0 }, col, OPTS);
+    expect(result).toBe(col + 'main' + RESET + ' ' + COLOR_CODES.green + '+5' + RESET);
+  });
+
+  test('render: shows red -N for deletions', () => {
+    const col = COLOR_CODES.cyan;
+    const result = f.render({ branch: 'main', ins: 0, del: 3 }, col, OPTS);
+    expect(result).toBe(col + 'main' + RESET + ' ' + COLOR_CODES.red + '-3' + RESET);
+  });
+
+  test('render: shows both green and red for mixed diff', () => {
+    const col = COLOR_CODES.cyan;
+    const result = f.render({ branch: 'dev', ins: 10, del: 7 }, col, OPTS);
+    expect(result).toBe(col + 'dev' + RESET + ' ' + COLOR_CODES.green + '+10' + RESET + ' ' + COLOR_CODES.red + '-7' + RESET);
+  });
+
+  test('render: falls back to plain string for backwards compat', () => {
+    const result = f.render('main', NO_COLOR, OPTS);
+    expect(stripAnsi(result!)).toBe('main');
+  });
+
+  test('render: returns null for non-strings and no branch', () => {
     expect(f.render(undefined, NO_COLOR, OPTS)).toBeNull();
     expect(f.render(null, NO_COLOR, OPTS)).toBeNull();
   });

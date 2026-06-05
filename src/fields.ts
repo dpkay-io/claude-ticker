@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { execSync } from 'child_process';
 import type { ColorName, TimeFormat } from './types.js';
-import { RESET, DIM, colorToFgCode, colorToBgCode } from './types.js';
+import { RESET, DIM, COLOR_CODES, colorToFgCode, colorToBgCode } from './types.js';
 
 export type JsonObj = Record<string, unknown>;
 export type DirNameEntry = { name: string; long?: boolean };
@@ -115,6 +115,30 @@ function readGitBranchCache(sessionId: string): { branch: string | undefined } |
 function writeGitBranchCache(sessionId: string, branch: string | undefined): void {
   const file = join(tmpdir(), `claude-ticker-git-${sessionId}.json`);
   try { writeFileSync(file, JSON.stringify({ branch, ts: Date.now() }), 'utf8'); } catch { /* ignore */ }
+}
+
+function parseShortStat(output: string): { ins: number; del: number } {
+  const ins = output.match(/(\d+) insertion/);
+  const del = output.match(/(\d+) deletion/);
+  return { ins: ins ? parseInt(ins[1], 10) : 0, del: del ? parseInt(del[1], 10) : 0 };
+}
+
+function getGitDiffStats(cwd?: string): { ins: number; del: number } | null {
+  const opts = { encoding: 'utf8' as BufferEncoding, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[], cwd };
+  try {
+    const out = (execSync('git diff --shortstat HEAD', opts) as string).trim();
+    if (!out) return { ins: 0, del: 0 };
+    return parseShortStat(out);
+  } catch {
+    try {
+      const unstaged = (execSync('git diff --shortstat', opts) as string).trim();
+      const staged = (execSync('git diff --cached --shortstat', opts) as string).trim();
+      if (!unstaged && !staged) return { ins: 0, del: 0 };
+      const u = parseShortStat(unstaged);
+      const s = parseShortStat(staged);
+      return { ins: u.ins + s.ins, del: u.del + s.del };
+    } catch { return null; }
+  }
 }
 
 export const FIELD_REGISTRY = {
@@ -314,12 +338,13 @@ export const FIELD_REGISTRY = {
   },
 
   git_branch: {
-    label: 'Git branch (current)',
+    label: 'Git branch with diff stats',
     defaultColor: 'cyan',
     extract: (data) => {
       const sessionId = str(data.session_id) ?? 'default';
       const cwd = str(obj(data.workspace)?.current_dir) ?? str(data.cwd);
-      
+      let branch: string | undefined;
+
       if (cwd) {
         try {
           let dir = cwd;
@@ -334,31 +359,44 @@ export const FIELD_REGISTRY = {
           if (headPath) {
             const head = readFileSync(headPath, 'utf8').trim();
             if (head.startsWith('ref: refs/heads/')) {
-              return head.slice(16);
+              branch = head.slice(16);
             }
           }
         } catch { /* ignore and fallback */ }
       }
 
-      const hit = readGitBranchCache(sessionId);
-      if (hit) return hit.branch;
-      let branch: string | undefined;
-      try {
-        branch = execSync('git branch --show-current', {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim() || undefined;
-      } catch {
-        branch = undefined;
+      if (!branch) {
+        const hit = readGitBranchCache(sessionId);
+        if (hit) {
+          branch = hit.branch;
+        } else {
+          try {
+            branch = execSync('git branch --show-current', {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'ignore'],
+            }).trim() || undefined;
+          } catch {
+            branch = undefined;
+          }
+          writeGitBranchCache(sessionId, branch);
+        }
       }
-      writeGitBranchCache(sessionId, branch);
-      return branch;
+
+      const diff = getGitDiffStats(cwd);
+      return { branch, ins: diff?.ins ?? 0, del: diff?.del ?? 0 };
     },
     percentValue: null,
     render: (raw, col) => {
-      const val = str(raw);
-      if (!val) return null;
-      return styled(col, val);
+      const o = obj(raw);
+      const branch = str(o?.branch) ?? str(raw);
+      if (!branch) return null;
+      const ins = num(o?.ins) ?? 0;
+      const del = num(o?.del) ?? 0;
+      if (ins === 0 && del === 0) return styled(col, branch);
+      const parts = [styled(col, branch)];
+      if (ins > 0) parts.push(COLOR_CODES.green + '+' + ins + RESET);
+      if (del > 0) parts.push(COLOR_CODES.red + '-' + del + RESET);
+      return parts.join(' ');
     },
   },
 

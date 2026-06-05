@@ -44,9 +44,11 @@ claude-ticker dir-color set ~/ws/client-work red
 
 When you tab between five terminals running five Claude sessions, your eyes land on the right one in under a second. No more `pwd`. No more "wait — which repo did I just run that command in?" No more pasting changes into the wrong project.
 
-### 2. Always know your branch — `git_branch`
+### 2. Always know your branch and what's changed — `git_branch`
 
-`git_branch` is on by default. Every render of the status bar shows the branch you're on, so you don't accidentally commit to `main`, lose track of a feature branch mid-session, or get surprised by a stale checkout after switching worktrees.
+`git_branch` is on by default. Every render of the status bar shows the branch you're on plus a live diff summary: insertions in **green** and deletions in **red**, e.g. `main +12 -3`. You don't accidentally commit to `main`, lose track of a feature branch mid-session, or get surprised by a stale checkout after switching worktrees — and you always know how much uncommitted work is in flight.
+
+When the working tree is clean, only the branch name is shown.
 
 > **Tip:** Paired with `dir-name` + `dir-color`, this is the combo that makes claude-ticker indispensable when you're juggling sessions: one Claude on `feature/payments` in the API repo (blue), another on `bugfix/login` in the web repo (red), a third on `main` doing a docs read (green). All instantly readable from the bar — you stop "swapping contexts" in your head because the bar already shows you which context you're in.
 
@@ -68,7 +70,7 @@ Show, hide, reorder, or recolor any field with a single command. Override colors
 
 ### 5. Blazingly fast, zero dependencies, zero token cost
 
-- **Sub-millisecond rendering.** Directly parses `.git/HEAD` to resolve your branch without spawning costly child processes.
+- **Sub-millisecond branch resolution.** Directly parses `.git/HEAD` to resolve your branch without spawning costly child processes. Diff stats are fetched via a lightweight `git diff --shortstat`.
 - **No runtime dependencies.** Nothing extra in your `node_modules`.
 - **~29 kB on the wire.** Installs in a blink, starts in a blink.
 - **No tokens consumed.** Runs as a local status-bar hook, not an API client.
@@ -108,7 +110,7 @@ Available fields:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `dir` | on | Current working directory (home folder shortened to `~`) |
-| `git_branch` | on | Current git branch name |
+| `git_branch` | on | Current git branch with diff stats (`branch +ins -del`) |
 | `model_id` | on | Active model ID, `claude-` prefix stripped (e.g. `sonnet-4-6`) |
 | `ctx` | on | Context window fill % — how full this conversation's memory is |
 | `5h` | on | 5-hour usage % with reset time |
@@ -155,7 +157,7 @@ Field color defaults:
 | Field | Default color |
 |-------|---------------|
 | `dir` | yellow |
-| `git_branch` | cyan |
+| `git_branch` | cyan (diff: green/red) |
 | `worktree` | cyan |
 | `agent` | magenta |
 | `session` | dim |
