@@ -1,9 +1,6 @@
 # claude-ticker
 
-[![npm version](https://img.shields.io/npm/v/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker)
-[![npm downloads](https://img.shields.io/npm/dm/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker)
-[![license](https://img.shields.io/npm/l/claude-ticker.svg)](https://github.com/dpkay-io/claude-ticker/blob/master/LICENSE)
-[![node](https://img.shields.io/node/v/claude-ticker.svg)](https://nodejs.org)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-cc785c)](https://claude.ai/code) [![platform](https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-blue)](https://github.com/dpkay-io/claude-ticker) [![license](https://img.shields.io/npm/l/claude-ticker.svg)](https://github.com/dpkay-io/claude-ticker/blob/master/LICENSE) [![productivity](https://img.shields.io/badge/productivity-blue)](https://www.npmjs.com/package/claude-ticker) [![ai-tools](https://img.shields.io/badge/ai--tools-blueviolet)](https://www.npmjs.com/package/claude-ticker) [![npm downloads](https://img.shields.io/npm/dt/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker) [![npm version](https://img.shields.io/npm/v/claude-ticker.svg)](https://www.npmjs.com/package/claude-ticker) [![node](https://img.shields.io/node/v/claude-ticker.svg)](https://nodejs.org)
 
 A customizable status bar for [Claude CLI](https://claude.ai/code) — built so you always know which project, branch, model, and budget you're working with, at a glance.
 
