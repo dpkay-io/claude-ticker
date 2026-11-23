@@ -1,10 +1,10 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join }    from 'path';
-import { homedir } from 'os';
 import type { Config } from './fields.js';
 import { DEFAULT_CONFIG } from './fields.js';
+import { CLAUDE_DIR } from './settings.js';
 
-export const CONFIG_PATH = join(homedir(), '.claude', 'claude-ticker.json');
+export const CONFIG_PATH = join(CLAUDE_DIR, 'claude-ticker.json');
 
 export function loadConfig(): Config {
   if (!existsSync(CONFIG_PATH)) return structuredClone(DEFAULT_CONFIG);
@@ -24,6 +24,8 @@ export function loadConfig(): Config {
 }
 
 export function saveConfig(config: Config): void {
+  // A fresh machine may not have ~/.claude yet (Claude Code creates it on first run).
+  mkdirSync(CLAUDE_DIR, { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   console.log(`Saved: ${CONFIG_PATH}`);
 }

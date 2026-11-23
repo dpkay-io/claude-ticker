@@ -7,6 +7,7 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn(),
     readFileSync: vi.fn(),
     writeFileSync: vi.fn(),
+    mkdirSync: vi.fn(),
   };
 });
 
@@ -20,6 +21,7 @@ vi.mock('path', async (importOriginal) => {
 });
 
 import * as fs from 'fs';
+import { join } from 'path';
 import { loadConfig, saveConfig, CONFIG_PATH } from '../config.js';
 import { DEFAULT_CONFIG } from '../fields.js';
 
@@ -115,6 +117,13 @@ describe('saveConfig', () => {
       JSON.stringify(cfg, null, 2),
       'utf8',
     );
+  });
+
+  test('creates ~/.claude first, so a fresh machine does not crash', () => {
+    saveConfig(DEFAULT_CONFIG);
+    expect(vi.mocked(fs.mkdirSync)).toHaveBeenCalledWith(join('/home/testuser', '.claude'), { recursive: true });
+    expect(vi.mocked(fs.mkdirSync).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(fs.writeFileSync).mock.invocationCallOrder[0]);
   });
 
   test('logs the save path', () => {
