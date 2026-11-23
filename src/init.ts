@@ -1,37 +1,39 @@
-import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, mkdirSync } from 'fs';
 import { createInterface } from 'readline/promises';
-import { join }    from 'path';
-import { homedir } from 'os';
+import { loadConfig } from './config.js';
+import {
+  CLAUDE_DIR, SETTINGS_PATH, BACKUP_PATH,
+  buildStatusLine, isOurStatusLine, readSettings, writeSettings, syncStatusLine,
+} from './settings.js';
+import type { JsonObj } from './settings.js';
 
-const CLAUDE_DIR    = join(homedir(), '.claude');
-const SETTINGS_PATH = join(CLAUDE_DIR, 'settings.json');
-const BACKUP_PATH   = join(CLAUDE_DIR, 'settings.json.bak');
-const COMMAND       = 'claude-ticker';
+const RESTART_MSG = 'Done! Restart Claude CLI to see your status bar.';
 
 export async function init(): Promise<void> {
   mkdirSync(CLAUDE_DIR, { recursive: true });
-  if (!existsSync(SETTINGS_PATH)) {
-    writeFileSync(
-      SETTINGS_PATH,
-      JSON.stringify({ statusLine: { type: 'command', command: COMMAND } }, null, 2),
-      'utf8',
-    );
+  const cfg = loadConfig();
+  const read = readSettings();
+
+  if (read.kind === 'missing') {
+    writeSettings({ statusLine: buildStatusLine(cfg) });
     console.log(`Created ${SETTINGS_PATH}`);
-    console.log('Done! Restart Claude CLI to see your status bar.');
+    console.log(RESTART_MSG);
     return;
   }
 
-  let settings: Record<string, unknown>;
-  try {
-    settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')) as Record<string, unknown>;
-  } catch {
+  if (read.kind === 'invalid') {
     console.error(`Cannot parse ${SETTINGS_PATH} — fix the JSON first, then re-run init.`);
     process.exit(1);
   }
 
-  const current = settings.statusLine as Record<string, unknown> | undefined;
-  if (current?.command === COMMAND) {
-    console.log('Already configured. No changes made.');
+  const { settings } = read;
+  const current = settings.statusLine as JsonObj | undefined;
+
+  if (isOurStatusLine(current)) {
+    const result = syncStatusLine(cfg, 'fill');
+    console.log(result === 'updated'
+      ? `Already configured. Added missing status line options to ${SETTINGS_PATH}`
+      : 'Already configured. No changes made.');
     return;
   }
 
@@ -49,8 +51,7 @@ export async function init(): Promise<void> {
   copyFileSync(SETTINGS_PATH, BACKUP_PATH);
   console.log(`Backup → ${BACKUP_PATH}`);
 
-  settings.statusLine = { type: 'command', command: COMMAND };
-  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf8');
+  writeSettings({ ...settings, statusLine: buildStatusLine(cfg) });
   console.log(`Updated ${SETTINGS_PATH}`);
-  console.log('Done! Restart Claude CLI to see your status bar.');
+  console.log(RESTART_MSG);
 }

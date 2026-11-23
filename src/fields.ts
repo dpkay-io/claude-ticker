@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from 'os';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { execSync } from 'child_process';
 import type { ColorName, TimeFormat } from './types.js';
 import { RESET, DIM, COLOR_CODES, colorToFgCode, colorToBgCode } from './types.js';
@@ -48,6 +48,47 @@ function fmtDuration(ms: number): string {
   return remM > 0 ? `${h}h${remM}m` : `${h}h`;
 }
 
+const SECONDS_PER_MINUTE = 60;
+const TOKENS_PER_K = 1_000;
+const TOKENS_PER_M = 1_000_000;
+const PERCENT = 100;
+
+/** 950 → "950", 9_500 → "9.5k", 79_168 → "79k", 1_000_000 → "1M", 1_250_000 → "1.3M". */
+export function fmtTokens(n: number): string {
+  const scaled = (value: number, unit: string) =>
+    (value < 10 ? value.toFixed(1).replace(/\.0$/, '') : String(Math.round(value))) + unit;
+  if (n >= TOKENS_PER_M || Math.round(n / TOKENS_PER_K) >= TOKENS_PER_K) return scaled(n / TOKENS_PER_M, 'M');
+  if (n >= TOKENS_PER_K) return scaled(n / TOKENS_PER_K, 'k');
+  return String(n);
+}
+
+/** Coarse countdown for glanceable display: "52m" above a minute, "45s" below. */
+function fmtCountdown(seconds: number): string {
+  return seconds >= SECONDS_PER_MINUTE
+    ? `${Math.floor(seconds / SECONDS_PER_MINUTE)}m`
+    : `${Math.max(0, Math.floor(seconds))}s`;
+}
+
+const TTL_UNIT_SECONDS: Record<string, number> = { s: 1, m: 60, h: 3_600, d: 86_400 };
+
+/** Parses Claude Code's prompt-cache TTL ("5m", "1h") into seconds. */
+export function parseTtlSeconds(ttl: unknown): number | null {
+  const m = typeof ttl === 'string' ? ttl.match(/^(\d+)([smhd])$/) : null;
+  return m ? parseInt(m[1], 10) * TTL_UNIT_SECONDS[m[2]] : null;
+}
+
+function nowSeconds(): number {
+  return Date.now() / 1000;
+}
+
+const SAFE_URL = /^https?:\/\/[^\s\x00-\x1f\x7f]+$/;
+
+/** Wraps text in an OSC 8 terminal hyperlink. Unsafe or missing URLs return the text unchanged. */
+export function hyperlink(url: string | undefined, text: string): string {
+  if (!url || !SAFE_URL.test(url)) return text;
+  return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
+}
+
 function styled(col: string, text: string): string {
   return col ? col + text + RESET : text;
 }
@@ -93,15 +134,72 @@ function findDirName(raw: string, dirNames: Record<string, DirNameEntry>): { nam
   return best ? { name: best.name, long: best.long, remainder: best.remainder } : null;
 }
 
+/** Renders a directory with its dir-name alias and dir-color background, else `~`-shortened. */
+function renderPath(val: string, col: string, opts: RenderOpts): string {
+  const dirColor = findDirColor(val, opts.dirColors);
+  const display = aliasedPath(val, opts) ?? homeRelativePath(val);
+  return dirColor ? styledBg(dirColor, display) : styled(col, display);
+}
+
+function aliasedPath(val: string, opts: RenderOpts): string | null {
+  const nameMatch = findDirName(val, opts.dirNames);
+  if (!nameMatch) return null;
+  return nameMatch.long && nameMatch.remainder
+    ? `${nameMatch.name}/${nameMatch.remainder}`
+    : nameMatch.name;
+}
+
+function homeRelativePath(val: string): string {
+  const home = homedir();
+  const match = process.platform === 'win32'
+    ? val.toLowerCase().startsWith(home.toLowerCase())
+    : val.startsWith(home);
+  return (match ? '~' + val.slice(home.length) : val).replace(/\\/g, '/');
+}
+
+function currentDir(data: JsonObj): string | undefined {
+  return str(obj(data.workspace)?.current_dir) ?? str(data.cwd);
+}
+
 export interface FieldDef {
   label: string;
   defaultColor: ColorName;
   extract: (data: JsonObj) => unknown;
   percentValue: ((raw: unknown) => number | null) | null;
   render: (raw: unknown, color: string, opts: RenderOpts) => string | null;
+  /** Layout marker: starts a new status line instead of rendering text. */
+  lineBreak?: true;
+}
+
+function rateLimitField(
+  windowKey: string,
+  label: string,
+  description: string,
+  includeDay: boolean,
+  extraSuffix?: (window: JsonObj) => string,
+): FieldDef {
+  return {
+    label: description,
+    defaultColor: 'dynamic',
+    extract: (data) => obj(obj(data.rate_limits)?.[windowKey]),
+    percentValue: (raw) => num(obj(raw)?.used_percentage) ?? null,
+    render: (raw, col, opts) => {
+      const o = obj(raw);
+      if (!o) return null;
+      const pct = Math.round(num(o.used_percentage) ?? 0);
+      const ts = num(o.resets_at);
+      const reset = ts ? DIM + '@' + fmtTime(ts, includeDay, opts.timeFormat) + RESET : '';
+      return styled(col, `${label}:${pct}%`) + reset + (extraSuffix?.(o) ?? '');
+    },
+  };
 }
 
 const GIT_BRANCH_TTL_MS = 10_000;
+/** Collapses bursts of renders (Claude Code debounces at 300ms) into one `git diff`. */
+const GIT_DIFF_TTL_MS = 2_000;
+const GIT_HEAD_MAX_DEPTH = 10;
+const GIT_REF_PREFIX = 'ref: refs/heads/';
+const GITDIR_PREFIX = 'gitdir:';
 
 function readGitBranchCache(sessionId: string): { branch: string | undefined } | null {
   const file = join(tmpdir(), `claude-ticker-git-${sessionId}.json`);
@@ -123,7 +221,57 @@ function parseShortStat(output: string): { ins: number; del: number } {
   return { ins: ins ? parseInt(ins[1], 10) : 0, del: del ? parseInt(del[1], 10) : 0 };
 }
 
-function getGitDiffStats(cwd?: string): { ins: number; del: number } | null {
+function gitDiffCachePath(sessionId: string): string {
+  return join(tmpdir(), `claude-ticker-gitdiff-${sessionId}.json`);
+}
+
+type DiffStats = { ins: number; del: number };
+
+/** `stats: null` caches a failed `git diff` too, so a broken repo doesn't spawn git on every render. */
+type DiffCacheEntry = { cwd?: string; stats: DiffStats | null; ts: number };
+
+function getCachedGitDiffStats(sessionId: string, cwd?: string): DiffStats | null {
+  const file = gitDiffCachePath(sessionId);
+  try {
+    const hit = JSON.parse(readFileSync(file, 'utf8')) as Partial<DiffCacheEntry>;
+    if (hit.cwd === cwd && hit.stats !== undefined && typeof hit.ts === 'number' && Date.now() - hit.ts < GIT_DIFF_TTL_MS) {
+      return hit.stats;
+    }
+  } catch { /* miss */ }
+  const stats = getGitDiffStats(cwd);
+  const entry: DiffCacheEntry = { cwd, stats, ts: Date.now() };
+  try { writeFileSync(file, JSON.stringify(entry), 'utf8'); } catch { /* ignore */ }
+  return stats;
+}
+
+/**
+ * Finds the HEAD file for `cwd` without spawning git. Handles both a normal
+ * `.git/` directory and a linked worktree, where `.git` is a file containing
+ * `gitdir: <path>`.
+ */
+function findGitHead(cwd: string): string | null {
+  let dir = cwd;
+  for (let i = 0; i < GIT_HEAD_MAX_DEPTH; i++) {
+    const dotGit = join(dir, '.git');
+    const headInDir = join(dotGit, 'HEAD');
+    if (existsSync(headInDir)) return headInDir;
+    if (existsSync(dotGit)) {
+      try {
+        const content = readFileSync(dotGit, 'utf8').trim();
+        if (content.startsWith(GITDIR_PREFIX)) {
+          const head = join(resolve(dir, content.slice(GITDIR_PREFIX.length).trim()), 'HEAD');
+          if (existsSync(head)) return head;
+        }
+      } catch { /* not a gitdir file */ }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function getGitDiffStats(cwd?: string): DiffStats | null {
   const opts = { encoding: 'utf8' as BufferEncoding, stdio: ['ignore', 'pipe', 'ignore'] as ('ignore' | 'pipe')[], cwd };
   try {
     const out = (execSync('git diff --shortstat HEAD', opts) as string).trim();
@@ -141,29 +289,27 @@ function getGitDiffStats(cwd?: string): { ins: number; del: number } | null {
   }
 }
 
+type BadgeColor = 'green' | 'red' | 'yellow' | 'dim';
+
+/** Review-state badges for the `pr` field, keyed by Claude Code's `pr.review_state`. */
+const REVIEW_STATE_BADGES: Record<string, { text: string; color: BadgeColor }> = {
+  approved:          { text: '✓', color: 'green' },
+  changes_requested: { text: '✗', color: 'red' },
+  pending:           { text: '•', color: 'yellow' },
+  draft:             { text: 'draft', color: 'dim' },
+};
+
+const DEFAULT_OUTPUT_STYLE = 'default';
+
 export const FIELD_REGISTRY = {
   dir: {
     label: 'Working directory',
     defaultColor: 'yellow',
-    extract: (data) => str(obj(data.workspace)?.current_dir) ?? str(data.cwd),
+    extract: currentDir,
     percentValue: null,
     render: (raw, col, opts) => {
       const val = str(raw);
-      if (!val) return null;
-      const dirColor = findDirColor(val, opts.dirColors);
-      const nameMatch = findDirName(val, opts.dirNames);
-      if (nameMatch) {
-        const display = nameMatch.long && nameMatch.remainder
-          ? `${nameMatch.name}/${nameMatch.remainder}`
-          : nameMatch.name;
-        return dirColor ? styledBg(dirColor, display) : styled(col, display);
-      }
-      const home = homedir();
-      const match = process.platform === 'win32'
-        ? val.toLowerCase().startsWith(home.toLowerCase())
-        : val.startsWith(home);
-      const rel = (match ? '~' + val.slice(home.length) : val).replace(/\\/g, '/');
-      return dirColor ? styledBg(dirColor, rel) : styled(col, rel);
+      return val ? renderPath(val, col, opts) : null;
     },
   },
 
@@ -203,35 +349,15 @@ export const FIELD_REGISTRY = {
     },
   },
 
-  '5h': {
-    label: '5-hour rate limit',
-    defaultColor: 'dynamic',
-    extract: (data) => obj(obj(data.rate_limits)?.five_hour),
-    percentValue: (raw) => num(obj(raw)?.used_percentage) ?? null,
-    render: (raw, col, opts) => {
-      const o = obj(raw);
-      if (!o) return null;
-      const i = Math.round(num(o.used_percentage) ?? 0);
-      const ts = num(o.resets_at);
-      const suffix = ts ? DIM + '@' + fmtTime(ts, false, opts.timeFormat) + RESET : '';
-      return styled(col, `5h:${i}%`) + suffix;
-    },
-  },
+  '5h': rateLimitField('five_hour', '5h', '5-hour rate limit', false),
 
-  '7d': {
-    label: '7-day rate limit',
-    defaultColor: 'dynamic',
-    extract: (data) => obj(obj(data.rate_limits)?.seven_day),
-    percentValue: (raw) => num(obj(raw)?.used_percentage) ?? null,
-    render: (raw, col, opts) => {
-      const o = obj(raw);
-      if (!o) return null;
-      const i = Math.round(num(o.used_percentage) ?? 0);
-      const ts = num(o.resets_at);
-      const suffix = ts ? DIM + '@' + fmtTime(ts, true, opts.timeFormat) + RESET : '';
-      return styled(col, `7d:${i}%`) + suffix;
-    },
-  },
+  '7d': rateLimitField('seven_day', '7d', '7-day rate limit', true),
+
+  spend: rateLimitField('spend_limit', 'spend', 'Gateway spend limit (USD)', true, (o) => {
+    const used = num(o.used_usd);
+    const limit = num(o.limit_usd);
+    return used != null && limit != null ? DIM + ` $${Math.round(used)}/$${Math.round(limit)}` + RESET : '';
+  }),
 
   cost: {
     label: 'Session cost (USD)',
@@ -342,25 +468,15 @@ export const FIELD_REGISTRY = {
     defaultColor: 'cyan',
     extract: (data) => {
       const sessionId = str(data.session_id) ?? 'default';
-      const cwd = str(obj(data.workspace)?.current_dir) ?? str(data.cwd);
+      const cwd = currentDir(data);
       let branch: string | undefined;
 
       if (cwd) {
         try {
-          let dir = cwd;
-          let headPath = '';
-          for (let i = 0; i < 10; i++) {
-            const p = join(dir, '.git', 'HEAD');
-            if (existsSync(p)) { headPath = p; break; }
-            const parent = dirname(dir);
-            if (parent === dir) break;
-            dir = parent;
-          }
+          const headPath = findGitHead(cwd);
           if (headPath) {
             const head = readFileSync(headPath, 'utf8').trim();
-            if (head.startsWith('ref: refs/heads/')) {
-              branch = head.slice(16);
-            }
+            if (head.startsWith(GIT_REF_PREFIX)) branch = head.slice(GIT_REF_PREFIX.length);
           }
         } catch { /* ignore and fallback */ }
       }
@@ -374,6 +490,8 @@ export const FIELD_REGISTRY = {
             branch = execSync('git branch --show-current', {
               encoding: 'utf8',
               stdio: ['ignore', 'pipe', 'ignore'],
+              // A missing directory (e.g. preview's sample path) would make the spawn fail outright.
+              cwd: cwd && existsSync(cwd) ? cwd : undefined,
             }).trim() || undefined;
           } catch {
             branch = undefined;
@@ -382,7 +500,8 @@ export const FIELD_REGISTRY = {
         }
       }
 
-      const diff = getGitDiffStats(cwd);
+      // Diff stats are only shown next to a branch, so skip `git diff` when there is none.
+      const diff = branch ? getCachedGitDiffStats(sessionId, cwd) : null;
       return { branch, ins: diff?.ins ?? 0, del: diff?.del ?? 0 };
     },
     percentValue: null,
@@ -423,6 +542,164 @@ export const FIELD_REGISTRY = {
       return styled(col, `agent:${val}`);
     },
   },
+  tokens: {
+    label: 'Context tokens used / window size',
+    defaultColor: 'dynamic',
+    extract: (data) => obj(data.context_window),
+    percentValue: (raw) => {
+      const o = obj(raw);
+      const pct = num(o?.used_percentage);
+      if (pct != null) return pct;
+      const used = num(o?.total_input_tokens);
+      const size = num(o?.context_window_size);
+      return used != null && size ? (used / size) * PERCENT : null;
+    },
+    render: (raw, col) => {
+      const o = obj(raw);
+      const used = num(o?.total_input_tokens);
+      const size = num(o?.context_window_size);
+      if (used == null || !size) return null;
+      return styled(col, `${fmtTokens(used)}/${fmtTokens(size)}`);
+    },
+  },
+
+  cache: {
+    label: 'Prompt cache: time until cold, hit ratio',
+    defaultColor: 'dynamic',
+    extract: (data) => obj(data.prompt_cache),
+    percentValue: (raw) => {
+      const o = obj(raw);
+      if (!o) return null;
+      const expiresAt = num(o.expires_at);
+      const ttl = parseTtlSeconds(o.ttl);
+      if (o.warm !== true || expiresAt == null) return PERCENT;
+      const remaining = expiresAt - nowSeconds();
+      if (remaining <= 0) return PERCENT;
+      return ttl ? Math.min(PERCENT, Math.max(0, (1 - remaining / ttl) * PERCENT)) : null;
+    },
+    render: (raw, col) => {
+      const o = obj(raw);
+      if (!o || o.caching_observed !== true) return null;
+      const expiresAt = num(o.expires_at);
+      const remaining = expiresAt == null ? 0 : expiresAt - nowSeconds();
+      const warm = o.warm === true && remaining > 0;
+      const hitRatio = num(o.hit_ratio);
+      const hit = hitRatio != null ? DIM + ` hit:${Math.round(hitRatio * PERCENT)}%` + RESET : '';
+      return styled(col, `cache:${warm ? fmtCountdown(remaining) : 'cold'}`) + hit;
+    },
+  },
+
+  pr: {
+    label: 'Open PR / MR with review state (clickable)',
+    defaultColor: 'blue',
+    extract: (data) => obj(data.pr),
+    percentValue: null,
+    render: (raw, col) => {
+      const o = obj(raw);
+      const n = num(o?.number);
+      if (!o || n == null) return null;
+      const isMr = o.kind === 'mr';
+      const text = styled(col, `${isMr ? 'MR!' : 'PR#'}${n}`);
+      const badge = REVIEW_STATE_BADGES[str(o.review_state) ?? ''];
+      const state = badge ? ' ' + styled(COLOR_CODES[badge.color], badge.text) : '';
+      return hyperlink(str(o.url), text + state);
+    },
+  },
+
+  fast: {
+    label: 'Fast mode on',
+    defaultColor: 'yellow',
+    extract: (data) => bool(data.fast_mode),
+    percentValue: null,
+    render: (raw, col) => (raw === true ? styled(col, 'fast') : null),
+  },
+
+  over_200k: {
+    label: 'Last request exceeded 200k tokens',
+    defaultColor: 'yellow',
+    extract: (data) => bool(data.exceeds_200k_tokens),
+    percentValue: null,
+    render: (raw, col) => (raw === true ? styled(col, '>200k') : null),
+  },
+
+  style: {
+    label: 'Output style (hidden when default)',
+    defaultColor: 'dim',
+    extract: (data) => str(obj(data.output_style)?.name),
+    percentValue: null,
+    render: (raw, col) => {
+      const val = str(raw);
+      if (!val || val.toLowerCase() === DEFAULT_OUTPUT_STYLE) return null;
+      return styled(col, `style:${val}`);
+    },
+  },
+
+  repo: {
+    label: 'Repository owner/name from origin',
+    defaultColor: 'dim',
+    extract: (data) => obj(obj(data.workspace)?.repo),
+    percentValue: null,
+    render: (raw, col) => {
+      const o = obj(raw);
+      const owner = str(o?.owner);
+      const name = str(o?.name);
+      if (!owner || !name) return null;
+      return styled(col, `${owner}/${name}`);
+    },
+  },
+
+  api_time: {
+    label: 'Time spent waiting on the API',
+    defaultColor: 'none',
+    extract: (data) => num(obj(data.cost)?.total_api_duration_ms),
+    percentValue: null,
+    render: (raw, col) => {
+      const v = num(raw);
+      if (v == null || v === 0) return null;
+      return styled(col, `api:${fmtDuration(v)}`);
+    },
+  },
+
+  project: {
+    label: 'Launch directory (only when cwd moved away)',
+    defaultColor: 'dim',
+    extract: (data) => {
+      const project = str(obj(data.workspace)?.project_dir);
+      const current = currentDir(data);
+      if (!project || !current) return undefined;
+      const home = homedir();
+      return normalizePath(project, home) === normalizePath(current, home) ? undefined : project;
+    },
+    percentValue: null,
+    render: (raw, col, opts) => {
+      const val = str(raw);
+      return val ? styled(col, 'launch:') + renderPath(val, col, opts) : null;
+    },
+  },
+
+  added_dirs: {
+    label: 'Extra directories added with /add-dir',
+    defaultColor: 'dim',
+    extract: (data) => {
+      const dirs = obj(data.workspace)?.added_dirs;
+      return Array.isArray(dirs) ? dirs.length : undefined;
+    },
+    percentValue: null,
+    render: (raw, col) => {
+      const n = num(raw);
+      if (!n) return null;
+      return styled(col, `+${n} ${n === 1 ? 'dir' : 'dirs'}`);
+    },
+  },
+
+  newline: {
+    label: 'Line break: fields after it go on the next line',
+    defaultColor: 'none',
+    extract: () => undefined,
+    percentValue: null,
+    render: () => null,
+    lineBreak: true,
+  },
 } satisfies Record<string, FieldDef>;
 
 export type FieldName = keyof typeof FIELD_REGISTRY;
@@ -437,6 +714,10 @@ export interface Config {
   dirColors: Record<string, ColorName>;
   dirNames: Record<string, DirNameEntry>;
   staleTTL: number;
+  /** statusLine.refreshInterval in seconds; 0 = event-driven only. */
+  refreshInterval: number;
+  /** statusLine.padding in characters; 0 = Claude Code default. */
+  padding: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -448,4 +729,9 @@ export const DEFAULT_CONFIG: Config = {
   dirColors:  {},
   dirNames:   {},
   staleTTL:   120,
+  refreshInterval: 30,
+  padding:    0,
 };
+
+/** Fields whose color can follow the warning / critical thresholds. */
+export const THRESHOLD_FIELDS = ALL_FIELDS.filter((f) => FIELD_REGISTRY[f].percentValue !== null);

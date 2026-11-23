@@ -58,16 +58,18 @@ The fields that matter most when you're deep in a session:
 - **`cost`** — session spend in USD.
 - **`duration`** — wall-clock time on the current session.
 - **`lines`** — lines added/removed this session.
+- **`cache`** — minutes until the prompt cache goes cold, plus hit ratio. A cold cache means the next message re-sends your whole context at full price.
+- **`tokens`** — context tokens used vs. window size, e.g. `79k/1M`.
 
 Each shifts green → yellow → red as you climb toward a limit, with configurable thresholds (default: warn at 50%, critical at 75%). You don't read the numbers — you read the color.
 
-### 4. 17 fields, fully customizable
+### 4. 28 fields, fully customizable
 
-Show, hide, reorder, or recolor any field with a single command. Override colors with named colors, CSS color names (`coral`, `tomato`, …), or hex (`#ff7f50`). Configure the separator, 12h / 24h clock, and your own warning / critical thresholds.
+Show, hide, reorder, or recolor any field with a single command. Split the bar over several lines with the `newline` field. When Claude Code reports the terminal width, fields at the end of a line are dropped instead of wrapping. Override colors with named colors, CSS color names (`coral`, `tomato`, …), or hex (`#ff7f50`). Configure the separator, 12h / 24h clock, and your own warning / critical thresholds.
 
 ### 5. Blazingly fast, zero dependencies, zero token cost
 
-- **Sub-millisecond branch resolution.** Directly parses `.git/HEAD` to resolve your branch without spawning costly child processes. Diff stats are fetched via a lightweight `git diff --shortstat`.
+- **Sub-millisecond branch resolution.** Directly parses `.git/HEAD` (including linked worktrees) to resolve your branch without spawning costly child processes. Diff stats are fetched via a lightweight `git diff --shortstat`, cached for 2 seconds, and skipped entirely outside a git branch.
 - **No runtime dependencies.** Nothing extra in your `node_modules`.
 - **~29 kB on the wire.** Installs in a blink, starts in a blink.
 - **No tokens consumed.** Runs as a local status-bar hook, not an API client.
@@ -122,7 +124,19 @@ Available fields:
 | `effort` | off | Reasoning effort level, e.g. `effort:high` |
 | `thinking` | off | Extended thinking state, e.g. `thinking:on` |
 | `vim` | off | Vim mode (INSERT, NORMAL, etc.) |
-| `agent` | off | Agent name when running a sub-agent, shown as `agent:<name>` |
+| `agent` | off | Agent name when running with `--agent`, shown as `agent:<name>` |
+| `tokens` | off | Context tokens used / window size, e.g. `79k/1M` |
+| `cache` | off | Prompt cache time until cold + hit ratio, e.g. `cache:52m hit:94%` (or `cache:cold`) |
+| `pr` | off | Open PR / MR for the branch with review state (`✓` approved, `✗` changes requested, `•` pending, `draft`), clickable in terminals that support links |
+| `fast` | off | `fast` when fast mode is on |
+| `over_200k` | off | `>200k` when the last request went over 200k tokens |
+| `spend` | off | Gateway spend limit %, reset time and USD, e.g. `spend:63%@Mon09:00 $314/$500` |
+| `style` | off | Output style, hidden when `default` |
+| `repo` | off | Repository `owner/name` from the `origin` remote |
+| `api_time` | off | Time spent waiting on the API, e.g. `api:1m17s` |
+| `project` | off | Launch directory, shown only after the working directory moved away from it |
+| `added_dirs` | off | Number of extra directories added with `/add-dir`, e.g. `+2 dirs` |
+| `newline` | off | Not a field: everything after it goes on the next line |
 
 **Examples:**
 
@@ -130,6 +144,8 @@ Available fields:
 claude-ticker fields hide model
 claude-ticker fields show cost duration
 claude-ticker fields order ctx 5h 7d dir cost
+claude-ticker fields show cache tokens pr
+claude-ticker fields order dir git_branch pr newline model_id ctx tokens cache 5h 7d   # two lines
 ```
 
 ---
@@ -144,7 +160,7 @@ claude-ticker color thresholds <warn%> <crit%>  # set dynamic thresholds
 
 Available colors: `red` `green` `yellow` `blue` `magenta` `cyan` `white` `dim` `dynamic` `none`, any CSS color name (`coral`, `tomato`, …), or hex (`#rgb` / `#rrggbb`).
 
-- **`dynamic`** — percentage / level fields only; color shifts green → yellow → red based on thresholds (default for `ctx`, `5h`, `7d`, `effort`)
+- **`dynamic`** — percentage / level fields only; color shifts green → yellow → red based on thresholds (default for `ctx`, `tokens`, `cache`, `5h`, `7d`, `spend`, `effort`). For `cache` the percentage is how much of the cache lifetime has passed, so it turns red as it nears cold.
 - **`none`** — no color applied
 
 Default thresholds: warning at 50%, critical at 75%.
@@ -163,6 +179,12 @@ Field color defaults:
 | `5h` | dynamic |
 | `7d` | dynamic |
 | `effort` | dynamic |
+| `tokens` | dynamic |
+| `cache` | dynamic |
+| `spend` | dynamic |
+| `pr` | blue |
+| `fast` / `over_200k` | yellow |
+| `style` / `repo` / `project` / `added_dirs` | dim |
 | everything else | none |
 
 **Examples:**
@@ -264,6 +286,24 @@ claude-ticker time 24h   # → 5h:8%@14:30
 
 ---
 
+### `claude-ticker refresh [seconds|off]`
+
+How often Claude Code re-runs the status bar while the session is idle, so countdowns like `cache` and `duration` stay current. Default `30`. `off` means it only updates on Claude Code events (new message, `/compact`, mode change, and so on).
+
+```sh
+claude-ticker refresh        # show current value
+claude-ticker refresh 10     # every 10 seconds
+claude-ticker refresh off    # events only
+```
+
+---
+
+### `claude-ticker padding [n]`
+
+Extra left padding for the status bar, in characters (0–20). Default `0`.
+
+---
+
 ### `claude-ticker config`
 
 ```sh
@@ -288,7 +328,10 @@ Settings are stored in `~/.claude/claude-ticker.json`. You can edit it directly 
   "separator": "  ",
   "timeFormat": "24h",
   "dirColors": {},
-  "dirNames": {}
+  "dirNames": {},
+  "staleTTL": 120,
+  "refreshInterval": 30,
+  "padding": 0
 }
 ```
 
@@ -298,9 +341,29 @@ Settings are stored in `~/.claude/claude-ticker.json`. You can edit it directly 
 
 `dirNames` maps directory paths to alias objects: `{ "name": "my-project", "long": false }`. Use the `dir-name` command to manage these.
 
+## How claude-ticker manages `settings.json`
+
+`init` writes a `statusLine` entry like this:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "claude-ticker",
+    "refreshInterval": 30
+  }
+}
+```
+
+Each command updates only its own option, and only when the status line is claude-ticker's. `refresh` sets `refreshInterval`, and `padding` sets `padding` (left out at 0). `fields` adds `hideVimModeIndicator` while the `vim` field is shown, so the mode isn't printed twice. `config reset` resets all three. Keys claude-ticker doesn't manage are left alone, and another tool's status line is never touched. Re-running `init`, or upgrading with `npm install -g`, only adds missing options and never changes values you set yourself.
+
 ## Rate limit fields
 
-`5h` and `7d` are only populated by Claude CLI for Claude.ai subscribers (Pro / Max) and only appear after the first API response in a session. They are silently omitted until data is available.
+`5h` and `7d` are only populated by Claude CLI for Claude.ai subscribers (Pro / Max) and only appear after the first API response in a session. They are silently omitted until data is available, and a window disappears once its reset time passes. `spend` only appears behind a Claude apps gateway with a spend limit.
+
+## Gaps in Claude Code's data
+
+Claude Code sometimes sends updates that leave out data it sent a moment ago, for example right after resuming a session. claude-ticker fills those gaps from its last update for up to `staleTTL` seconds (default 120) after Claude Code last actually sent the data, so the bar doesn't flicker. Data whose absence means something (`pr`, `vim`, `agent`, `worktree`, `effort`) is never filled in, and usage windows past their reset are dropped.
 
 ## Contributing
 

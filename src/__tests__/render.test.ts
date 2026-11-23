@@ -19,7 +19,7 @@ vi.mock('fs', () => ({
 }));
 
 import { readFileSync, writeFileSync } from 'fs';
-import { renderStatus, render, deepMerge } from '../render.js';
+import { renderStatus, render, mergeState, pruneExpiredWindows, visibleWidth, fitLine, availableWidth } from '../render.js';
 import { loadConfig } from '../config.js';
 import { DEFAULT_CONFIG, FIELD_REGISTRY } from '../fields.js';
 import type { Config } from '../fields.js';
@@ -312,58 +312,150 @@ describe('render() stdin entry point', () => {
   });
 });
 
-// ── deepMerge ────────────────────────────────────────────────────────────────
+// ── mergeState ───────────────────────────────────────────────────────────────
 
-describe('deepMerge', () => {
-  test('current keys overwrite cached keys', () => {
-    const cached = { a: 1, b: 2 };
-    const current = { a: 10, c: 3 };
-    expect(deepMerge(cached, current)).toEqual({ a: 10, b: 2, c: 3 });
+describe('mergeState', () => {
+  const NOW = 1_000_000_000;
+  const TTL = 120_000;
+  const cacheOf = (data: Record<string, unknown>, seen: Record<string, number> = {}, ts = NOW) => ({ data, seen, ts });
+
+  test('without a cache returns current and marks every key seen now', () => {
+    const state = mergeState(null, { a: 1, rate_limits: { five_hour: { x: 1 } } }, NOW, TTL);
+    expect(state.data).toEqual({ a: 1, rate_limits: { five_hour: { x: 1 } } });
+    expect(state.seen).toEqual({ a: NOW, rate_limits: NOW, 'rate_limits.five_hour': NOW });
+    expect(state.ts).toBe(NOW);
   });
 
-  test('preserves cached keys missing from current', () => {
-    const cached = { context_window: { used_percentage: 42 }, model: { id: 'opus' } };
-    const current = { model: { id: 'sonnet' } };
-    expect(deepMerge(cached, current)).toEqual({
-      context_window: { used_percentage: 42 },
-      model: { id: 'sonnet' },
-    });
+  test('current keys win over cached keys', () => {
+    const state = mergeState(cacheOf({ a: 1, b: 2 }, { a: NOW, b: NOW }), { a: 10 }, NOW + 1, TTL);
+    expect(state.data).toEqual({ a: 10, b: 2 });
   });
 
-  test('merges nested objects one level deep', () => {
-    const cached = { rate_limits: { five_hour: { pct: 30 }, seven_day: { pct: 55 } } };
-    const current = { rate_limits: { five_hour: { pct: 35 } } };
-    expect(deepMerge(cached, current)).toEqual({
-      rate_limits: { five_hour: { pct: 35 }, seven_day: { pct: 55 } },
-    });
+  test('backfills a missing key seen within the TTL, keeping its original seen time', () => {
+    const state = mergeState(cacheOf({ cost: { total_cost_usd: 1 } }, { cost: NOW }), {}, NOW + 60_000, TTL);
+    expect(state.data).toEqual({ cost: { total_cost_usd: 1 } });
+    expect(state.seen.cost).toBe(NOW);
   });
 
-  test('current scalar replaces cached object', () => {
-    const cached = { x: { nested: true } };
-    const current = { x: 'scalar' };
-    expect(deepMerge(cached, current)).toEqual({ x: 'scalar' });
+  test('stops backfilling once the key has been absent for the TTL (does not self-refresh)', () => {
+    let state = mergeState(cacheOf({ cost: { total_cost_usd: 1 } }, { cost: NOW }), {}, NOW + 60_000, TTL);
+    state = mergeState(state, {}, NOW + 110_000, TTL);
+    expect(state.data.cost).toBeDefined();
+    state = mergeState(state, {}, NOW + TTL, TTL);
+    expect(state.data.cost).toBeUndefined();
   });
 
-  test('current object replaces cached scalar', () => {
-    const cached = { x: 'scalar' };
-    const current = { x: { nested: true } };
-    expect(deepMerge(cached, current)).toEqual({ x: { nested: true } });
+  test.each(['pr', 'vim', 'agent', 'worktree', 'effort'])('never backfills %s (its absence is meaningful)', (key) => {
+    const state = mergeState(cacheOf({ [key]: { any: 1 } }, { [key]: NOW }), {}, NOW + 1, TTL);
+    expect(state.data[key]).toBeUndefined();
   });
 
-  test('arrays are replaced, not merged', () => {
-    const cached = { tags: ['a', 'b'] };
-    const current = { tags: ['c'] };
-    expect(deepMerge(cached, current)).toEqual({ tags: ['c'] });
+  test('backfills a rate-limit window missing from a partial rate_limits object', () => {
+    const cached = { rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } } };
+    const state = mergeState(
+      cacheOf(cached, { rate_limits: NOW, 'rate_limits.five_hour': NOW, 'rate_limits.seven_day': NOW }),
+      { rate_limits: { five_hour: { used_percentage: 35 } } },
+      NOW + 1, TTL,
+    );
+    expect(state.data.rate_limits).toEqual({ five_hour: { used_percentage: 35 }, seven_day: { used_percentage: 55 } });
+    expect(state.seen['rate_limits.seven_day']).toBe(NOW);
+    expect(state.seen['rate_limits.five_hour']).toBe(NOW + 1);
   });
 
-  test('empty current returns cached as-is', () => {
-    const cached = { a: 1, b: { c: 2 } };
-    expect(deepMerge(cached, {})).toEqual({ a: 1, b: { c: 2 } });
+  test('drops a stale rate-limit window even while the other window keeps arriving', () => {
+    const cached = { rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } } };
+    const state = mergeState(
+      cacheOf(cached, { rate_limits: NOW + TTL, 'rate_limits.five_hour': NOW, 'rate_limits.seven_day': NOW + TTL }),
+      { rate_limits: { seven_day: { used_percentage: 56 } } },
+      NOW + TTL + 1, TTL,
+    );
+    expect(state.data.rate_limits).toEqual({ seven_day: { used_percentage: 56 } });
   });
 
-  test('empty cached returns current as-is', () => {
-    const current = { a: 1, b: { c: 2 } };
-    expect(deepMerge({}, current)).toEqual({ a: 1, b: { c: 2 } });
+  test('legacy cache without a seen map treats every key as seen at the cache timestamp', () => {
+    const legacy = { data: { cost: { total_cost_usd: 1 } }, seen: {}, ts: NOW };
+    expect(mergeState(legacy, {}, NOW + 1, TTL).data.cost).toBeDefined();
+    expect(mergeState(legacy, {}, NOW + TTL, TTL).data.cost).toBeUndefined();
+  });
+
+  test('replaces arrays and scalars wholesale', () => {
+    const state = mergeState(cacheOf({ tags: ['a'], x: { n: 1 } }, { tags: NOW, x: NOW }), { tags: ['c'], x: 's' }, NOW + 1, TTL);
+    expect(state.data).toEqual({ tags: ['c'], x: 's' });
+  });
+});
+
+// ── pruneExpiredWindows ──────────────────────────────────────────────────────
+
+describe('pruneExpiredWindows', () => {
+  test('drops windows whose resets_at has passed, keeps the rest', () => {
+    const data = { rate_limits: { five_hour: { resets_at: 100 }, seven_day: { resets_at: 300 } }, other: 1 };
+    expect(pruneExpiredWindows(data, 200)).toEqual({ rate_limits: { seven_day: { resets_at: 300 } }, other: 1 });
+  });
+
+  test('removes rate_limits entirely when every window expired', () => {
+    expect(pruneExpiredWindows({ rate_limits: { five_hour: { resets_at: 100 } } }, 100)).toEqual({});
+  });
+
+  test('keeps windows without a resets_at', () => {
+    const data = { rate_limits: { spend_limit: { used_percentage: 10 } } };
+    expect(pruneExpiredWindows(data, 1e12)).toEqual(data);
+  });
+
+  test('returns data unchanged when there are no rate limits', () => {
+    const data = { a: 1 };
+    expect(pruneExpiredWindows(data, 0)).toBe(data);
+  });
+});
+
+// ── layout ───────────────────────────────────────────────────────────────────
+
+describe('visibleWidth', () => {
+  test('ignores SGR color codes and OSC 8 hyperlinks', () => {
+    const s = `${COLOR_CODES.red}ab${RESET}\x1b]8;;https://x.y\x07cd\x1b]8;;\x07`;
+    expect(visibleWidth(s)).toBe(4);
+  });
+
+  test('counts code points, not UTF-16 units', () => {
+    expect(visibleWidth('✓•')).toBe(2);
+  });
+});
+
+describe('fitLine', () => {
+  test('joins all parts when width is unknown', () => {
+    expect(fitLine(['aa', 'bb'], '  ', null)).toBe('aa  bb');
+  });
+
+  test('drops trailing parts that would overflow', () => {
+    expect(fitLine(['aaaa', 'bbbb', 'cccc'], '  ', 10)).toBe('aaaa  bbbb');
+    expect(fitLine(['aaaa', 'bbbb', 'cccc'], '  ', 9)).toBe('aaaa');
+  });
+
+  test('always keeps the first part', () => {
+    expect(fitLine(['a-very-long-part', 'b'], ' ', 3)).toBe('a-very-long-part');
+  });
+});
+
+describe('availableWidth', () => {
+  const cfg = makeConfig({ padding: 2 });
+  test('subtracts padding from COLUMNS', () => {
+    expect(availableWidth('80', cfg)).toBe(78);
+  });
+  test.each([undefined, '', 'abc', '0', '-5'])('returns null for unusable COLUMNS %j', (v) => {
+    expect(availableWidth(v, cfg)).toBeNull();
+  });
+});
+
+describe('renderStatus layout', () => {
+  test('newline field splits output into lines and empty lines are dropped', () => {
+    const cfg = makeConfig({ fields: ['model', 'newline', 'cost', 'newline', 'ctx'], separator: ' ', colors: {} });
+    const out = stripAnsi(renderStatus({ model: { display_name: 'Claude Opus 5.5' }, context_window: { used_percentage: 9 } }, cfg));
+    expect(out).toBe('Opus 5.5\nctx:9%');
+  });
+
+  test('fits each line to the width independently', () => {
+    const cfg = makeConfig({ fields: ['model', 'ctx', 'newline', 'version', 'session'], separator: ' ', colors: {} });
+    const data = { model: { display_name: 'Claude Opus 5.5' }, context_window: { used_percentage: 9 }, version: '2.1.330', session_name: 'abc' };
+    expect(stripAnsi(renderStatus(data, cfg, 10))).toBe('Opus 5.5\nv2.1.330');
   });
 });
 
@@ -468,5 +560,64 @@ describe('state caching', () => {
       expect.any(String),
       'utf8',
     );
+  });
+});
+
+// ── render() end to end: stale data and width ────────────────────────────────
+
+describe('render() with Claude Code dropping data', () => {
+  let originalStdinDescriptor: PropertyDescriptor | undefined;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  const originalColumns = process.env.COLUMNS;
+
+  beforeEach(() => {
+    originalStdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin');
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    delete process.env.COLUMNS;
+  });
+
+  afterEach(() => {
+    if (originalStdinDescriptor) Object.defineProperty(process, 'stdin', originalStdinDescriptor);
+    stdoutSpy.mockRestore();
+    if (originalColumns === undefined) delete process.env.COLUMNS; else process.env.COLUMNS = originalColumns;
+  });
+
+  function pipe(data: Record<string, unknown>): void {
+    const stream = Readable.from([JSON.stringify(data)]) as unknown as NodeJS.ReadStream;
+    (stream as unknown as Record<string, unknown>).isTTY = false;
+    (stream as unknown as { setEncoding: (enc: string) => void }).setEncoding = () => {};
+    Object.defineProperty(process, 'stdin', { value: stream, configurable: true });
+  }
+
+  test('a rate-limit window past its reset is not shown even if cached', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({ fields: ['ctx', '5h'], colors: {}, staleTTL: 120 }));
+    const past = Math.floor(Date.now() / 1000) - 1;
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify({
+      data: { rate_limits: { five_hour: { used_percentage: 88, resets_at: past } } },
+      seen: { rate_limits: Date.now(), 'rate_limits.five_hour': Date.now() },
+      ts: Date.now(),
+    }));
+    pipe({ session_id: 'drop1', context_window: { used_percentage: 5 } });
+    await render();
+    const out = stripAnsi(stdoutSpy.mock.calls[0][0] as string);
+    expect(out).toBe('ctx:5%');
+  });
+
+  test('a cached PR is not shown once Claude Code stops sending it', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({ fields: ['ctx', 'pr'], colors: {}, staleTTL: 120 }));
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify({
+      data: { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } }, seen: { pr: Date.now() }, ts: Date.now(),
+    }));
+    pipe({ session_id: 'drop2', context_window: { used_percentage: 5 } });
+    await render();
+    expect(stripAnsi(stdoutSpy.mock.calls[0][0] as string)).toBe('ctx:5%');
+  });
+
+  test('uses COLUMNS minus padding to drop overflowing trailing fields', async () => {
+    vi.mocked(loadConfig).mockReturnValue(makeConfig({ fields: ['ctx', 'version'], colors: {}, separator: ' ', padding: 0 }));
+    process.env.COLUMNS = '8';
+    pipe({ session_id: 'w1', context_window: { used_percentage: 5 }, version: '2.1.330' });
+    await render();
+    expect(stripAnsi(stdoutSpy.mock.calls[0][0] as string)).toBe('ctx:5%');
   });
 });

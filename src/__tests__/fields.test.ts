@@ -19,7 +19,8 @@ vi.mock('fs', () => ({
   writeFileSync: vi.fn(),
 }));
 
-import { FIELD_REGISTRY, ALL_FIELDS, DEFAULT_CONFIG } from '../fields.js';
+import { FIELD_REGISTRY, ALL_FIELDS, DEFAULT_CONFIG, THRESHOLD_FIELDS, fmtTokens, parseTtlSeconds, hyperlink } from '../fields.js';
+import { writeFileSync } from 'fs';
 import type { RenderOpts, FieldDef } from '../fields.js';
 
 const NO_COLOR = '';
@@ -976,5 +977,273 @@ describe('FIELD_REGISTRY structure', () => {
       expect(def.defaultColor, `${name}.defaultColor`).toBe('dynamic');
       expect(def.percentValue, `${name}.percentValue`).toBeTypeOf('function');
     }
+  });
+});
+
+// ── helpers: fmtTokens / parseTtlSeconds / hyperlink ────────────────────────
+
+describe('fmtTokens', () => {
+  test.each([
+    [0, '0'], [950, '950'], [1_000, '1k'], [9_500, '9.5k'], [79_168, '79k'],
+    [999_499, '999k'], [999_999, '1M'], [1_000_000, '1M'], [1_250_000, '1.3M'], [12_000_000, '12M'],
+  ])('%d → %s', (n, expected) => {
+    expect(fmtTokens(n)).toBe(expected);
+  });
+});
+
+describe('parseTtlSeconds', () => {
+  test.each([['5m', 300], ['1h', 3600], ['30s', 30], ['2d', 172_800], ['1x', null], [undefined, null], [5, null]])(
+    '%j → %j', (v, expected) => { expect(parseTtlSeconds(v)).toBe(expected); },
+  );
+});
+
+describe('hyperlink', () => {
+  test('wraps safe https URLs in OSC 8', () => {
+    expect(hyperlink('https://github.com/a/b/pull/1', 'PR')).toBe('\x1b]8;;https://github.com/a/b/pull/1\x07PR\x1b]8;;\x07');
+  });
+  test.each([undefined, '', 'javascript:alert(1)', 'https://x.y/\x07evil', 'https://x y'])('leaves text alone for %j', (url) => {
+    expect(hyperlink(url, 'PR')).toBe('PR');
+  });
+});
+
+describe('THRESHOLD_FIELDS', () => {
+  test('is derived from fields that have a percentValue', () => {
+    expect(THRESHOLD_FIELDS).toEqual(expect.arrayContaining(['ctx', '5h', '7d', 'effort', 'tokens', 'cache', 'spend']));
+    expect(THRESHOLD_FIELDS).not.toContain('dir');
+  });
+});
+
+// ── new fields ───────────────────────────────────────────────────────────────
+
+const renderField = (name: keyof typeof FIELD_REGISTRY, data: Record<string, unknown>, opts: RenderOpts = OPTS) => {
+  const f: FieldDef = FIELD_REGISTRY[name];
+  const raw = f.extract(data);
+  return { raw, pct: f.percentValue?.(raw) ?? null, text: f.render(raw, NO_COLOR, opts) };
+};
+
+describe('tokens field', () => {
+  test('renders used/size and uses used_percentage for color', () => {
+    const r = renderField('tokens', { context_window: { total_input_tokens: 79_168, context_window_size: 1_000_000, used_percentage: 8 } });
+    expect(r.text).toBe('79k/1M');
+    expect(r.pct).toBe(8);
+  });
+  test('falls back to computed percent when used_percentage is null', () => {
+    const r = renderField('tokens', { context_window: { total_input_tokens: 50_000, context_window_size: 200_000, used_percentage: null } });
+    expect(r.pct).toBe(25);
+  });
+  test('null without size', () => {
+    expect(renderField('tokens', { context_window: { total_input_tokens: 5 } }).text).toBeNull();
+    expect(renderField('tokens', {}).text).toBeNull();
+  });
+});
+
+describe('cache field', () => {
+  const NOW_S = 1_800_000_000;
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW_S * 1000); });
+  afterEach(() => { vi.useRealTimers(); });
+  const pc = (o: Record<string, unknown>) => ({ prompt_cache: { caching_observed: true, warm: true, ttl: '1h', ...o } });
+
+  test('warm: minutes left and hit ratio, percent = elapsed share of TTL', () => {
+    const r = renderField('cache', pc({ expires_at: NOW_S + 52 * 60 + 30, hit_ratio: 0.914 }));
+    expect(stripAnsi(r.text!)).toBe('cache:52m hit:91%');
+    expect(r.pct).toBeCloseTo((1 - 3150 / 3600) * 100, 5);
+  });
+  test('under a minute shows seconds', () => {
+    expect(stripAnsi(renderField('cache', pc({ expires_at: NOW_S + 45 })).text!)).toBe('cache:45s');
+  });
+  test('cold when expires_at passed even if warm flag is stale', () => {
+    const r = renderField('cache', pc({ expires_at: NOW_S - 1 }));
+    expect(stripAnsi(r.text!)).toBe('cache:cold');
+    expect(r.pct).toBe(100);
+  });
+  test('cold when warm is false or expires_at null', () => {
+    expect(stripAnsi(renderField('cache', pc({ warm: false, expires_at: NOW_S + 100 })).text!)).toBe('cache:cold');
+    expect(stripAnsi(renderField('cache', pc({ expires_at: null })).text!)).toBe('cache:cold');
+  });
+  test('hidden when caching never observed or absent', () => {
+    expect(renderField('cache', pc({ caching_observed: false })).text).toBeNull();
+    expect(renderField('cache', {}).text).toBeNull();
+  });
+  test('unknown ttl format gives no percent (no dynamic color) while warm', () => {
+    expect(renderField('cache', pc({ ttl: 'weird', expires_at: NOW_S + 100 })).pct).toBeNull();
+  });
+});
+
+describe('pr field', () => {
+  const url = 'https://github.com/a/b/pull/12';
+  test.each([
+    ['approved', 'PR#12 ✓'], ['changes_requested', 'PR#12 ✗'], ['pending', 'PR#12 •'], ['draft', 'PR#12 draft'], [undefined, 'PR#12'],
+  ])('review_state %s', (state, expected) => {
+    const r = renderField('pr', { pr: { number: 12, url, review_state: state } });
+    expect(stripAnsi(r.text!).replace(/\x1b\]8;;[^\x07]*\x07/g, '')).toBe(expected);
+    expect(r.text!.startsWith(`\x1b]8;;${url}\x07`)).toBe(true);
+  });
+  test('GitLab merge request uses MR! prefix', () => {
+    const r = renderField('pr', { pr: { number: 3, kind: 'mr', url: 'https://gitlab.com/a/b/-/merge_requests/3' } });
+    expect(stripAnsi(r.text!).replace(/\x1b\]8;;[^\x07]*\x07/g, '')).toBe('MR!3');
+  });
+  test('null without a number', () => {
+    expect(renderField('pr', { pr: { url } }).text).toBeNull();
+    expect(renderField('pr', {}).text).toBeNull();
+  });
+});
+
+describe('flag fields', () => {
+  test('fast shows only when fast_mode is true', () => {
+    expect(renderField('fast', { fast_mode: true }).text).toBe('fast');
+    expect(renderField('fast', { fast_mode: false }).text).toBeNull();
+  });
+  test('over_200k shows only when exceeded', () => {
+    expect(renderField('over_200k', { exceeds_200k_tokens: true }).text).toBe('>200k');
+    expect(renderField('over_200k', { exceeds_200k_tokens: false }).text).toBeNull();
+  });
+});
+
+describe('spend field', () => {
+  test('percent, reset day/time and USD', () => {
+    const resets = new Date(2026, 10, 23, 9, 5).getTime() / 1000;
+    const r = renderField('spend', { rate_limits: { spend_limit: { used_percentage: 62.8, resets_at: resets, used_usd: 314.12, limit_usd: 500 } } });
+    expect(stripAnsi(r.text!)).toMatch(/^spend:63%@\w{3}09:05 \$314\/\$500$/);
+    expect(r.pct).toBe(62.8);
+  });
+  test('USD suffix omitted when absent', () => {
+    expect(stripAnsi(renderField('spend', { rate_limits: { spend_limit: { used_percentage: 120 } } }).text!)).toBe('spend:120%');
+  });
+});
+
+describe('style / repo / api_time / added_dirs fields', () => {
+  test('style hidden for default (any case), shown otherwise', () => {
+    expect(renderField('style', { output_style: { name: 'default' } }).text).toBeNull();
+    expect(renderField('style', { output_style: { name: 'Default' } }).text).toBeNull();
+    expect(renderField('style', { output_style: { name: 'Explanatory' } }).text).toBe('style:Explanatory');
+  });
+  test('repo owner/name', () => {
+    expect(renderField('repo', { workspace: { repo: { host: 'gitlab.com', owner: 'g/sub', name: 'p' } } }).text).toBe('g/sub/p');
+    expect(renderField('repo', { workspace: {} }).text).toBeNull();
+  });
+  test('api_time', () => {
+    expect(renderField('api_time', { cost: { total_api_duration_ms: 77_451 } }).text).toBe('api:1m17s');
+    expect(renderField('api_time', { cost: { total_api_duration_ms: 0 } }).text).toBeNull();
+  });
+  test('added_dirs pluralizes and hides when empty', () => {
+    expect(renderField('added_dirs', { workspace: { added_dirs: ['/a'] } }).text).toBe('+1 dir');
+    expect(renderField('added_dirs', { workspace: { added_dirs: ['/a', '/b'] } }).text).toBe('+2 dirs');
+    expect(renderField('added_dirs', { workspace: { added_dirs: [] } }).text).toBeNull();
+  });
+});
+
+describe('project field', () => {
+  test('hidden when cwd is the launch dir (trailing slash ignored)', () => {
+    expect(renderField('project', { workspace: { current_dir: '/home/testuser/ws/a', project_dir: '/home/testuser/ws/a/' } }).text).toBeNull();
+  });
+  test('shown, ~-shortened, when cwd moved away', () => {
+    const r = renderField('project', { workspace: { current_dir: '/tmp/x', project_dir: '/home/testuser/ws/a' } });
+    expect(stripAnsi(r.text!)).toBe('launch:~/ws/a');
+  });
+  test('uses dir-name alias', () => {
+    const opts = { ...OPTS, dirNames: { '/home/testuser/ws/a': { name: 'app' } } };
+    const r = renderField('project', { workspace: { current_dir: '/tmp/x', project_dir: '/home/testuser/ws/a' } }, opts);
+    expect(stripAnsi(r.text!)).toBe('launch:app');
+  });
+});
+
+describe('newline field', () => {
+  test('is a line-break marker that renders nothing', () => {
+    expect(FIELD_REGISTRY.newline.lineBreak).toBe(true);
+    expect(renderField('newline', {}).text).toBeNull();
+  });
+});
+
+// ── git: linked worktrees and diff cache ─────────────────────────────────────
+
+describe('git_branch: worktree and diff cache', () => {
+  afterEach(() => {
+    vi.mocked(execSync).mockReset();
+    vi.mocked(existsSync).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  });
+
+  test('reads HEAD through a linked worktree .git file without spawning git branch', () => {
+    vi.mocked(existsSync).mockImplementation((p) => {
+      const sp = String(p).replace(/\\/g, '/');
+      return sp === '/wt/feature/.git' || sp === '/repo/.git/worktrees/feature/HEAD';
+    });
+    vi.mocked(readFileSync).mockImplementation((p) => {
+      const sp = String(p).replace(/\\/g, '/');
+      if (sp === '/wt/feature/.git') return 'gitdir: /repo/.git/worktrees/feature\n';
+      if (sp === '/repo/.git/worktrees/feature/HEAD') return 'ref: refs/heads/feature-x\n';
+      throw new Error('ENOENT');
+    });
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/wt/feature' })).toMatchObject({ branch: 'feature-x' });
+    expect(execSync).not.toHaveBeenCalledWith('git branch --show-current', expect.anything());
+  });
+
+  test('git branch fallback skips a cwd that does not exist', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(execSync).mockReturnValue('main\n');
+    FIELD_REGISTRY.git_branch.extract({ cwd: '/gone', session_id: 'fb0' });
+    expect(execSync).toHaveBeenCalledWith('git branch --show-current', expect.objectContaining({ cwd: undefined }));
+  });
+
+  test('git branch fallback runs in the session cwd', () => {
+    vi.mocked(existsSync).mockImplementation((p) => String(p).replace(/\\/g, '/') === '/some/dir');
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(execSync).mockReturnValue('main\n');
+    FIELD_REGISTRY.git_branch.extract({ cwd: '/some/dir', session_id: 'fb' });
+    expect(execSync).toHaveBeenCalledWith('git branch --show-current', expect.objectContaining({ cwd: '/some/dir' }));
+  });
+
+  test('fresh diff cache for the same cwd skips git diff', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation((p) => {
+      if (String(p).includes('claude-ticker-gitdiff-')) return JSON.stringify({ cwd: '/r', stats: { ins: 4, del: 2 }, ts: Date.now() });
+      throw new Error('ENOENT');
+    });
+    vi.mocked(execSync).mockReturnValue('main\n');
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/r', session_id: 'dc1' })).toMatchObject({ ins: 4, del: 2 });
+    expect(execSync).not.toHaveBeenCalledWith('git diff --shortstat HEAD', expect.anything());
+  });
+
+  test('diff cache for a different cwd or expired is ignored and rewritten', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation((p) => {
+      if (String(p).includes('claude-ticker-gitdiff-')) return JSON.stringify({ cwd: '/other', stats: { ins: 4, del: 2 }, ts: Date.now() });
+      throw new Error('ENOENT');
+    });
+    vi.mocked(execSync).mockImplementation((cmd) =>
+      String(cmd) === 'git diff --shortstat HEAD' ? ' 1 file changed, 7 insertions(+), 1 deletion(-)' : 'main\n');
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/r', session_id: 'dc2' })).toMatchObject({ ins: 7, del: 1 });
+    expect(writeFileSync).toHaveBeenCalledWith(expect.stringContaining('claude-ticker-gitdiff-dc2'), expect.stringContaining('"ins":7'), 'utf8');
+  });
+
+  test('a failed git diff is cached, so the next render does not spawn git again', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation((p) => {
+      if (String(p).includes('claude-ticker-gitdiff-')) return JSON.stringify({ cwd: '/r', stats: null, ts: Date.now() });
+      throw new Error('ENOENT');
+    });
+    vi.mocked(execSync).mockReturnValue('main\n');
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/r', session_id: 'dc3' })).toMatchObject({ branch: 'main', ins: 0, del: 0 });
+    expect(execSync).not.toHaveBeenCalledWith(expect.stringContaining('git diff'), expect.anything());
+  });
+
+  test('a failed git diff writes a null cache entry', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).startsWith('git diff')) throw new Error('not a repo');
+      return 'main\n';
+    });
+    FIELD_REGISTRY.git_branch.extract({ cwd: '/r', session_id: 'dc4' });
+    expect(writeFileSync).toHaveBeenCalledWith(expect.stringContaining('claude-ticker-gitdiff-dc4'), expect.stringContaining('"stats":null'), 'utf8');
+  });
+
+  test('no branch means no git diff at all', () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(execSync).mockReturnValue('');
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/not-a-repo', session_id: 'dc5' })).toMatchObject({ branch: undefined, ins: 0, del: 0 });
+    expect(execSync).not.toHaveBeenCalledWith(expect.stringContaining('git diff'), expect.anything());
   });
 });

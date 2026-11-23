@@ -16,6 +16,11 @@ vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
 }));
 
+vi.mock('../config.js', async () => {
+  const { DEFAULT_CONFIG } = await import('../fields.js');
+  return { loadConfig: vi.fn(() => structuredClone(DEFAULT_CONFIG)) };
+});
+
 const mockRl = { question: vi.fn(), close: vi.fn() };
 vi.mock('readline/promises', () => ({
   createInterface: vi.fn(() => mockRl),
@@ -30,6 +35,7 @@ const CLAUDE_DIR    = join('/home/testuser', '.claude');
 const SETTINGS_PATH = join(CLAUDE_DIR, 'settings.json');
 const BACKUP_PATH   = join(CLAUDE_DIR, 'settings.json.bak');
 const COMMAND       = 'claude-ticker';
+const DEFAULT_STATUS_LINE = { type: 'command', command: COMMAND, refreshInterval: 30 };
 
 let mockExit: ReturnType<typeof vi.spyOn>;
 let mockConsoleLog: ReturnType<typeof vi.spyOn>;
@@ -62,7 +68,7 @@ describe('init', () => {
       await init();
       expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(
         SETTINGS_PATH,
-        JSON.stringify({ statusLine: { type: 'command', command: COMMAND } }, null, 2),
+        JSON.stringify({ statusLine: DEFAULT_STATUS_LINE }, null, 2),
         'utf8',
       );
     });
@@ -83,11 +89,11 @@ describe('init', () => {
     });
   });
 
-  describe('when settings.json exists and already configured', () => {
+  describe('when settings.json exists and already configured with current options', () => {
     beforeEach(() => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(
-        JSON.stringify({ statusLine: { type: 'command', command: COMMAND } }),
+        JSON.stringify({ statusLine: DEFAULT_STATUS_LINE }),
       );
     });
 
@@ -100,6 +106,40 @@ describe('init', () => {
       await init();
       expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
       expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('when settings.json is configured by an older claude-ticker (no options)', () => {
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ theme: 'dark', statusLine: { type: 'command', command: COMMAND } }),
+      );
+    });
+
+    test('adds the new options without prompting or backing up', async () => {
+      await init();
+      expect(mockRl.question).not.toHaveBeenCalled();
+      expect(vi.mocked(fs.copyFileSync)).not.toHaveBeenCalled();
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.statusLine).toEqual(DEFAULT_STATUS_LINE);
+      expect(written.theme).toBe('dark');
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Added missing status line options'));
+    });
+  });
+
+  describe('when the claude-ticker statusLine has a user-chosen refreshInterval', () => {
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ statusLine: { type: 'command', command: COMMAND, refreshInterval: 5 } }),
+      );
+    });
+
+    test('keeps it and makes no changes', async () => {
+      await init();
+      expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('No changes made'));
     });
   });
 
@@ -131,7 +171,7 @@ describe('init', () => {
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
       expect(written.theme).toBe('dark');
-      expect(written.statusLine).toEqual({ type: 'command', command: COMMAND });
+      expect(written.statusLine).toEqual(DEFAULT_STATUS_LINE);
     });
 
     test('writes to SETTINGS_PATH', async () => {
@@ -186,7 +226,7 @@ describe('init', () => {
       expect(mockRl.question).not.toHaveBeenCalled();
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
-      expect(written.statusLine).toEqual({ type: 'command', command: COMMAND });
+      expect(written.statusLine).toEqual(DEFAULT_STATUS_LINE);
       expect(written.theme).toBe('dark');
     });
   });

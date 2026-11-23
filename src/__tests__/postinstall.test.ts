@@ -15,6 +15,11 @@ vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
 }));
 
+vi.mock('../config.js', async () => {
+  const { DEFAULT_CONFIG } = await import('../fields.js');
+  return { loadConfig: vi.fn(() => structuredClone(DEFAULT_CONFIG)) };
+});
+
 import * as fs from 'fs';
 import { join } from 'path';
 import { postinstall } from '../postinstall.js';
@@ -22,6 +27,7 @@ import { postinstall } from '../postinstall.js';
 const CLAUDE_DIR    = join('/home/testuser', '.claude');
 const SETTINGS_PATH = join(CLAUDE_DIR, 'settings.json');
 const COMMAND       = 'claude-ticker';
+const DEFAULT_STATUS_LINE = { type: 'command', command: COMMAND, refreshInterval: 30 };
 
 let mockConsoleLog: ReturnType<typeof vi.spyOn>;
 
@@ -46,7 +52,7 @@ describe('postinstall', () => {
       postinstall();
       expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(
         SETTINGS_PATH,
-        JSON.stringify({ statusLine: { type: 'command', command: COMMAND } }, null, 2),
+        JSON.stringify({ statusLine: DEFAULT_STATUS_LINE }, null, 2),
         'utf8',
       );
     });
@@ -65,7 +71,23 @@ describe('postinstall', () => {
       );
     });
 
-    test('does not modify files', () => {
+    test('adds newly supported options', () => {
+      postinstall();
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.statusLine).toEqual(DEFAULT_STATUS_LINE);
+      expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('added new status line options'));
+    });
+  });
+
+  describe('when the claude-ticker statusLine already has user-chosen options', () => {
+    beforeEach(() => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ statusLine: { type: 'command', command: COMMAND, refreshInterval: 5, padding: 2 } }),
+      );
+    });
+
+    test('does not override them or modify files', () => {
       postinstall();
       expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
     });
@@ -106,7 +128,7 @@ describe('postinstall', () => {
       const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
       expect(written.theme).toBe('dark');
-      expect(written.statusLine).toEqual({ type: 'command', command: COMMAND });
+      expect(written.statusLine).toEqual(DEFAULT_STATUS_LINE);
     });
 
     test('logs update message', () => {

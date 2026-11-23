@@ -3,7 +3,10 @@
 import { render }         from './render.js';
 import { init }           from './init.js';
 import { handleFields, handleColor, handleSeparator,
-         handleTime, handleConfigCmd, preview, handleDirColor, handleDirName } from './commands.js';
+         handleTime, handleConfigCmd, preview, handleDirColor, handleDirName,
+         handleRefresh, handlePadding } from './commands.js';
+import { ALL_FIELDS, DEFAULT_CONFIG } from './fields.js';
+import { VALID_COLORS } from './types.js';
 
 const [,, cmd, ...rest] = process.argv;
 
@@ -37,13 +40,15 @@ Usage:
 
   claude-ticker separator [value]         Get or set the separator between fields
   claude-ticker time <12h|24h>            Set reset-time display format
+  claude-ticker refresh [seconds|off]     Re-render every N seconds even when idle (default ${DEFAULT_CONFIG.refreshInterval})
+  claude-ticker padding [n]               Extra left padding for the status line (default ${DEFAULT_CONFIG.padding})
 
   claude-ticker config [show]             Print full JSON config
   claude-ticker config reset              Reset all settings to defaults
 
-Fields (default on):   dir · git_branch · model_id · ctx · 5h · 7d
-Fields (opt-in):       cost · duration · lines · session · version · effort · thinking · vim · model · worktree · agent
-Colors:                red · green · yellow · blue · magenta · cyan · white · dim · dynamic · none
+Fields (default on):   ${DEFAULT_CONFIG.fields.join(' · ')}
+Fields (opt-in):       ${ALL_FIELDS.filter((f) => !DEFAULT_CONFIG.fields.includes(f)).join(' · ')}
+Colors:                ${VALID_COLORS.join(' · ')}
 `;
 
 switch (cmd) {
@@ -74,6 +79,12 @@ switch (cmd) {
     break;
   case 'time':
     handleTime(rest);
+    break;
+  case 'refresh':
+    handleRefresh(rest);
+    break;
+  case 'padding':
+    handlePadding(rest);
     break;
   case 'config':
     handleConfigCmd(rest);

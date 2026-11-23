@@ -6,6 +6,12 @@ vi.mock('../config.js', () => ({
   CONFIG_PATH: '/home/testuser/.claude/claude-ticker.json',
 }));
 
+vi.mock('../settings.js', () => ({
+  syncStatusLine: vi.fn(() => 'unchanged'),
+  ourStatusLine: vi.fn(() => null),
+  SETTINGS_PATH: '/home/testuser/.claude/settings.json',
+}));
+
 vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/testuser'),
 }));
@@ -19,7 +25,10 @@ import {
   handleTime,
   handleConfigCmd,
   preview,
+  handleRefresh,
+  handlePadding,
 } from '../commands.js';
+import { syncStatusLine, ourStatusLine } from '../settings.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { DEFAULT_CONFIG, ALL_FIELDS } from '../fields.js';
 import type { Config } from '../fields.js';
@@ -613,9 +622,82 @@ describe('preview', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     preview();
     const output = (stdoutSpy.mock.calls[0][0] as string).replace(/\x1b\[[0-9;]*m/g, '');
-    expect(output).toContain('Sonnet 4.6');
+    expect(output).toContain('Opus 5.5');
     expect(output).toContain('session:my-feature');
-    expect(output).toContain('v1.4.2');
+    expect(output).toContain('v2.1.330');
     stdoutSpy.mockRestore();
+  });
+});
+
+// ── refresh / padding / settings sync ───────────────────────────────────────
+
+describe('handleRefresh', () => {
+  test('sets seconds, saves and syncs settings', () => {
+    handleRefresh(['10']);
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ refreshInterval: 10 }));
+    expect(syncStatusLine).toHaveBeenCalledWith(expect.objectContaining({ refreshInterval: 10 }), 'overwrite', ['refreshInterval']);
+  });
+
+  test('no args reports the value actually in settings.json when it is ours', () => {
+    vi.mocked(ourStatusLine).mockReturnValueOnce({ type: 'command', command: 'claude-ticker', refreshInterval: 5 });
+    handleRefresh([]);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('every 5s'));
+  });
+
+  test('no args reports off when our statusLine has no refreshInterval', () => {
+    vi.mocked(ourStatusLine).mockReturnValueOnce({ type: 'command', command: 'claude-ticker' });
+    handleRefresh([]);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('off'));
+  });
+
+  test('"off" stores 0', () => {
+    handleRefresh(['off']);
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ refreshInterval: 0 }));
+  });
+
+  test.each(['0.5', 'abc', '-1'])('rejects %s', (v) => {
+    expect(() => handleRefresh([v])).toThrow('process.exit');
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  test('prints current value with no args', () => {
+    handleRefresh([]);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('every 30s'));
+  });
+
+  test('logs when settings.json was updated', () => {
+    vi.mocked(syncStatusLine).mockReturnValueOnce('updated');
+    handleRefresh(['15']);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Updated status line options'));
+  });
+});
+
+describe('handlePadding', () => {
+  test('sets padding and syncs', () => {
+    handlePadding(['2']);
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ padding: 2 }));
+    expect(syncStatusLine).toHaveBeenCalledWith(expect.anything(), 'overwrite', ['padding']);
+  });
+
+  test.each(['-1', '21', '1.5', 'x'])('rejects %s', (v) => {
+    expect(() => handlePadding([v])).toThrow('process.exit');
+  });
+});
+
+describe('fields changes sync the vim indicator option', () => {
+  test('fields show vim syncs settings with vim in fields', () => {
+    handleFields(['show', 'vim']);
+    expect(syncStatusLine).toHaveBeenCalledWith(
+      expect.objectContaining({ fields: expect.arrayContaining(['vim']) }), 'overwrite', ['hideVimModeIndicator']);
+  });
+
+  test('fields hide syncs only the vim indicator option', () => {
+    handleFields(['hide', 'ctx']);
+    expect(syncStatusLine).toHaveBeenCalledWith(expect.anything(), 'overwrite', ['hideVimModeIndicator']);
+  });
+
+  test('config reset syncs every managed option', () => {
+    handleConfigCmd(['reset']);
+    expect(syncStatusLine).toHaveBeenCalledWith(expect.anything(), 'overwrite', undefined);
   });
 });

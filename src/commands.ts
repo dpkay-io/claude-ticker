@@ -4,12 +4,37 @@ import { loadConfig, saveConfig } from './config.js';
 import { renderStatus }           from './render.js';
 import type { FieldName, Config } from './fields.js';
 import type { ColorName } from './types.js';
-import { ALL_FIELDS, FIELD_REGISTRY, DEFAULT_CONFIG } from './fields.js';
+import { ALL_FIELDS, FIELD_REGISTRY, DEFAULT_CONFIG, THRESHOLD_FIELDS } from './fields.js';
+import { syncStatusLine, ourStatusLine, SETTINGS_PATH } from './settings.js';
+import type { ManagedKey } from './settings.js';
 import type { TimeFormat } from './types.js';
 import { VALID_COLORS, VALID_DIR_COLORS, isValidColor, isValidDirColor } from './types.js';
 
 const DIR_NAME_MIN = 2;
 const DIR_NAME_MAX = 30;
+const PADDING_MAX = 20;
+const REFRESH_OFF = 'off';
+const REFRESH_MIN_S = 1;
+
+/**
+ * Saves config, then mirrors the given statusLine options into settings.json.
+ * Omitting `keys` syncs every managed option (used by `config reset`).
+ */
+function saveAndSync(cfg: Config, keys?: readonly ManagedKey[]): void {
+  saveConfig(cfg);
+  if (syncStatusLine(cfg, 'overwrite', keys) === 'updated') console.log(`Updated status line options in ${SETTINGS_PATH}`);
+}
+
+/** Field visibility only affects the vim-indicator option. */
+const FIELD_SYNC_KEYS: readonly ManagedKey[] = ['hideVimModeIndicator'];
+
+/** Effective value: what settings.json actually has when it's ours, else the config value. */
+function effectiveOption(key: 'refreshInterval' | 'padding', fallback: number): number {
+  const line = ourStatusLine();
+  if (!line) return fallback;
+  const v = line[key];
+  return typeof v === 'number' ? v : 0;
+}
 
 function die(msg: string): never {
   console.error(`Error: ${msg}`);
@@ -46,7 +71,7 @@ export function handleFields(args: string[]): void {
       const field = rest[0] as FieldName;
       if (!field || !ALL_FIELDS.includes(field))
         die(`Unknown field "${field}". Valid: ${ALL_FIELDS.join(', ')}`);
-      if (!cfg.fields.includes(field)) { cfg.fields.push(field); saveConfig(cfg); }
+      if (!cfg.fields.includes(field)) { cfg.fields.push(field); saveAndSync(cfg, FIELD_SYNC_KEYS); }
       else console.log(`"${field}" is already visible.`);
       break;
     }
@@ -55,7 +80,7 @@ export function handleFields(args: string[]): void {
       if (!field || !ALL_FIELDS.includes(field))
         die(`Unknown field "${field}". Valid: ${ALL_FIELDS.join(', ')}`);
       cfg.fields = cfg.fields.filter(f => f !== field);
-      saveConfig(cfg);
+      saveAndSync(cfg, FIELD_SYNC_KEYS);
       break;
     }
     case 'order': {
@@ -63,12 +88,12 @@ export function handleFields(args: string[]): void {
       const invalid = rest.filter(f => !ALL_FIELDS.includes(f as FieldName));
       if (invalid.length) die(`Unknown fields: ${invalid.join(', ')}. Valid: ${ALL_FIELDS.join(', ')}`);
       cfg.fields = rest as FieldName[];
-      saveConfig(cfg);
+      saveAndSync(cfg, FIELD_SYNC_KEYS);
       break;
     }
     case 'reset': {
       cfg.fields = [...DEFAULT_CONFIG.fields];
-      saveConfig(cfg);
+      saveAndSync(cfg, FIELD_SYNC_KEYS);
       console.log(`Fields reset to default: ${DEFAULT_CONFIG.fields.join(', ')}`);
       break;
     }
@@ -100,7 +125,7 @@ export function handleColor(args: string[]): void {
         );
       }
       console.log(`\nValid colors: ${VALID_COLORS.join(', ')}, any CSS color name (coral, tomato…), or hex (#rgb / #rrggbb)`);
-      console.log('Thresholds apply to: ctx, 5h, 7d, effort');
+      console.log(`Thresholds apply to: ${THRESHOLD_FIELDS.join(', ')}`);
       break;
     }
     case 'set': {
@@ -252,6 +277,37 @@ export function handleTime(args: string[]): void {
   saveConfig(cfg);
 }
 
+// ── refresh / padding (Claude Code statusLine options) ───────────────────────
+
+export function handleRefresh(args: string[]): void {
+  const [value] = args;
+  if (value === undefined) {
+    const cur = effectiveOption('refreshInterval', loadConfig().refreshInterval);
+    console.log(cur > 0 ? `Refresh interval: every ${cur}s` : 'Refresh interval: off (updates on Claude Code events only)');
+    return;
+  }
+  const seconds = value === REFRESH_OFF ? 0 : Number(value);
+  if (!Number.isInteger(seconds) || (seconds !== 0 && seconds < REFRESH_MIN_S))
+    die(`Usage: claude-ticker refresh <seconds|${REFRESH_OFF}>  (whole seconds, minimum ${REFRESH_MIN_S})`);
+  const cfg = loadConfig();
+  cfg.refreshInterval = seconds;
+  saveAndSync(cfg, ['refreshInterval']);
+}
+
+export function handlePadding(args: string[]): void {
+  const [value] = args;
+  if (value === undefined) {
+    console.log(`Padding: ${effectiveOption('padding', loadConfig().padding)}`);
+    return;
+  }
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > PADDING_MAX)
+    die(`Usage: claude-ticker padding <0-${PADDING_MAX}>`);
+  const cfg = loadConfig();
+  cfg.padding = n;
+  saveAndSync(cfg, ['padding']);
+}
+
 // ── config ────────────────────────────────────────────────────────────────────
 
 export function handleConfigCmd(args: string[]): void {
@@ -261,7 +317,7 @@ export function handleConfigCmd(args: string[]): void {
       console.log(JSON.stringify(loadConfig(), null, 2));
       break;
     case 'reset':
-      saveConfig(structuredClone(DEFAULT_CONFIG) as Config);
+      saveAndSync(structuredClone(DEFAULT_CONFIG) as Config);
       console.log('Config reset to defaults.');
       break;
     default:
@@ -274,21 +330,40 @@ export function handleConfigCmd(args: string[]): void {
 export function preview(): void {
   const now  = Math.floor(Date.now() / 1000);
   const sample = {
-    workspace:      { current_dir: join(homedir(), 'ws', 'my-project') },
-    model:          { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
-    context_window: { used_percentage: 12 },
+    session_id:     'preview',
+    workspace: {
+      current_dir: join(homedir(), 'ws', 'my-project', 'packages', 'api'),
+      project_dir: join(homedir(), 'ws', 'my-project'),
+      added_dirs:  [join(homedir(), 'ws', 'shared')],
+      repo:        { host: 'github.com', owner: 'acme', name: 'my-project' },
+    },
+    model:          { id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' },
+    context_window: {
+      used_percentage:     12,
+      total_input_tokens:  120_000,
+      context_window_size: 1_000_000,
+    },
+    exceeds_200k_tokens: false,
+    fast_mode:           true,
+    output_style:        { name: 'Explanatory' },
     cost: {
-      total_cost_usd:      0.042,
-      total_duration_ms:   222_000,
-      total_lines_added:   42,
-      total_lines_removed: 5,
+      total_cost_usd:        0.042,
+      total_duration_ms:     222_000,
+      total_api_duration_ms: 77_000,
+      total_lines_added:     42,
+      total_lines_removed:   5,
     },
     rate_limits: {
-      five_hour: { used_percentage: 8,  resets_at: now + 3_600 },
-      seven_day: { used_percentage: 55, resets_at: now + 86_400 * 3 },
+      five_hour:   { used_percentage: 8,  resets_at: now + 3_600 },
+      seven_day:   { used_percentage: 55, resets_at: now + 86_400 * 3 },
+      spend_limit: { used_percentage: 63, resets_at: now + 86_400 * 9, used_usd: 314, limit_usd: 500, period: 'monthly' },
     },
+    prompt_cache: {
+      warm: true, caching_observed: true, ttl: '1h', expires_at: now + 52 * 60, hit_ratio: 0.94,
+    },
+    pr:           { number: 1234, url: 'https://github.com/acme/my-project/pull/1234', review_state: 'approved' },
     session_name: 'my-feature',
-    version:      '1.4.2',
+    version:      '2.1.330',
     effort:       { level: 'high' },
     thinking:     { enabled: true },
     vim:          { mode: 'INSERT' },
