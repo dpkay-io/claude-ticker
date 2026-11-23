@@ -670,9 +670,31 @@ describe('handleRefresh', () => {
     handleRefresh(['15']);
     expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Updated status line options'));
   });
+
+  test.each([
+    ['not-ours', 'uses another status line command'],
+    ['missing',  'does not exist yet'],
+    ['invalid',  'is not valid JSON'],
+  ] as const)('warns when settings.json is %s that the option is not applied yet', (result, reason) => {
+    vi.mocked(syncStatusLine).mockReturnValueOnce(result);
+    handleRefresh(['9']);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining(reason));
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('claude-ticker init'));
+  });
+
+  test('no warning when the option was applied or already matched', () => {
+    handleRefresh(['9']);
+    expect(mockConsoleLog).not.toHaveBeenCalledWith(expect.stringContaining('Note:'));
+  });
 });
 
 describe('handlePadding', () => {
+  test('warns when settings.json uses another status line', () => {
+    vi.mocked(syncStatusLine).mockReturnValueOnce('not-ours');
+    handlePadding(['2']);
+    expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('uses another status line command'));
+  });
+
   test('sets padding and syncs', () => {
     handlePadding(['2']);
     expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ padding: 2 }));

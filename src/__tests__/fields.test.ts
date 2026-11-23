@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'os';
+import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { RESET, COLOR_CODES, BG_COLOR_CODES, BG_TEXT_CODES } from '../types.js';
@@ -1164,14 +1165,13 @@ describe('git_branch: worktree and diff cache', () => {
   });
 
   test('reads HEAD through a linked worktree .git file without spawning git branch', () => {
-    vi.mocked(existsSync).mockImplementation((p) => {
-      const sp = String(p).replace(/\\/g, '/');
-      return sp === '/wt/feature/.git' || sp === '/repo/.git/worktrees/feature/HEAD';
-    });
+    // resolve() adds the drive letter on Windows, exactly as findGitHead does.
+    const dotGitFile = join('/wt/feature', '.git');
+    const worktreeHead = join(resolve('/repo/.git/worktrees/feature'), 'HEAD');
+    vi.mocked(existsSync).mockImplementation((p) => String(p) === dotGitFile || String(p) === worktreeHead);
     vi.mocked(readFileSync).mockImplementation((p) => {
-      const sp = String(p).replace(/\\/g, '/');
-      if (sp === '/wt/feature/.git') return 'gitdir: /repo/.git/worktrees/feature\n';
-      if (sp === '/repo/.git/worktrees/feature/HEAD') return 'ref: refs/heads/feature-x\n';
+      if (String(p) === dotGitFile) return 'gitdir: /repo/.git/worktrees/feature\n';
+      if (String(p) === worktreeHead) return 'ref: refs/heads/feature-x\n';
       throw new Error('ENOENT');
     });
     expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/wt/feature' })).toMatchObject({ branch: 'feature-x' });
@@ -1226,6 +1226,18 @@ describe('git_branch: worktree and diff cache', () => {
     vi.mocked(execSync).mockReturnValue('main\n');
     expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/r', session_id: 'dc3' })).toMatchObject({ branch: 'main', ins: 0, del: 0 });
     expect(execSync).not.toHaveBeenCalledWith(expect.stringContaining('git diff'), expect.anything());
+  });
+
+  test('resolves a relative gitdir (submodules) against the folder holding .git', () => {
+    const dotGitFile = join('/super/sub', '.git');
+    const moduleHead = join(resolve('/super/sub', '../.git/modules/sub'), 'HEAD');
+    vi.mocked(existsSync).mockImplementation((p) => String(p) === dotGitFile || String(p) === moduleHead);
+    vi.mocked(readFileSync).mockImplementation((p) => {
+      if (String(p) === dotGitFile) return 'gitdir: ../.git/modules/sub\n';
+      if (String(p) === moduleHead) return 'ref: refs/heads/sub-main\n';
+      throw new Error('ENOENT');
+    });
+    expect(FIELD_REGISTRY.git_branch.extract({ cwd: '/super/sub', session_id: 'sm' })).toMatchObject({ branch: 'sub-main' });
   });
 
   test('a failed git diff writes a null cache entry', () => {

@@ -21,7 +21,7 @@ Usage:
   claude-ticker fields [list]             List fields and current visibility
   claude-ticker fields show <field>       Enable a field
   claude-ticker fields hide <field>       Disable a field
-  claude-ticker fields order <f1> <f2>…  Set display order
+  claude-ticker fields order <f1> <f2>…   Set display order
   claude-ticker fields reset              Reset fields to default
 
   claude-ticker color [list]                Show field colors and dynamic thresholds

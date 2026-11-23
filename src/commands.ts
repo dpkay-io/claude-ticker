@@ -6,7 +6,7 @@ import type { FieldName, Config } from './fields.js';
 import type { ColorName } from './types.js';
 import { ALL_FIELDS, FIELD_REGISTRY, DEFAULT_CONFIG, THRESHOLD_FIELDS } from './fields.js';
 import { syncStatusLine, ourStatusLine, SETTINGS_PATH } from './settings.js';
-import type { ManagedKey } from './settings.js';
+import type { ManagedKey, SyncResult } from './settings.js';
 import type { TimeFormat } from './types.js';
 import { VALID_COLORS, VALID_DIR_COLORS, isValidColor, isValidDirColor } from './types.js';
 
@@ -20,9 +20,24 @@ const REFRESH_MIN_S = 1;
  * Saves config, then mirrors the given statusLine options into settings.json.
  * Omitting `keys` syncs every managed option (used by `config reset`).
  */
-function saveAndSync(cfg: Config, keys?: readonly ManagedKey[]): void {
+function saveAndSync(cfg: Config, keys?: readonly ManagedKey[]): SyncResult {
   saveConfig(cfg);
-  if (syncStatusLine(cfg, 'overwrite', keys) === 'updated') console.log(`Updated status line options in ${SETTINGS_PATH}`);
+  const result = syncStatusLine(cfg, 'overwrite', keys);
+  if (result === 'updated') console.log(`Updated status line options in ${SETTINGS_PATH}`);
+  return result;
+}
+
+/** Why a statusLine option saved to config can't reach Claude Code yet, by sync result. */
+const NOT_APPLIED_REASONS: Partial<Record<SyncResult, string>> = {
+  'not-ours': 'uses another status line command',
+  missing:    'does not exist yet',
+  invalid:    'is not valid JSON',
+};
+
+/** For commands whose whole point is a statusLine option: say when it won't take effect. */
+function saveAndApplyOption(cfg: Config, key: ManagedKey): void {
+  const reason = NOT_APPLIED_REASONS[saveAndSync(cfg, [key])];
+  if (reason) console.log(`Note: ${SETTINGS_PATH} ${reason}, so this takes effect after \`claude-ticker init\`.`);
 }
 
 /** Field visibility only affects the vim-indicator option. */
@@ -291,7 +306,7 @@ export function handleRefresh(args: string[]): void {
     die(`Usage: claude-ticker refresh <seconds|${REFRESH_OFF}>  (whole seconds, minimum ${REFRESH_MIN_S})`);
   const cfg = loadConfig();
   cfg.refreshInterval = seconds;
-  saveAndSync(cfg, ['refreshInterval']);
+  saveAndApplyOption(cfg, 'refreshInterval');
 }
 
 export function handlePadding(args: string[]): void {
@@ -305,7 +320,7 @@ export function handlePadding(args: string[]): void {
     die(`Usage: claude-ticker padding <0-${PADDING_MAX}>`);
   const cfg = loadConfig();
   cfg.padding = n;
-  saveAndSync(cfg, ['padding']);
+  saveAndApplyOption(cfg, 'padding');
 }
 
 // ── config ────────────────────────────────────────────────────────────────────
